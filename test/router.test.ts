@@ -262,8 +262,8 @@ describe("knowledge", () => {
     const { result } = await ok(run({ flash: sure }, { knowledgeBase: kb }));
     expect(result.knowledge).toBe(true);
     expect(result.calls[0].knowledge?.passages).toEqual([
-      { n: 1, pinned: true, title: "Always", heading: "Locked accounts", reference: "support/always", text: PASSAGES[0].text },
-      { n: 2, pinned: false, title: "Billing", heading: "Double charges", reference: "support/billing", text: PASSAGES[1].text },
+      { n: 1, pinned: true, title: "Always", heading: "Locked accounts", reference: "support:always", text: PASSAGES[0].text },
+      { n: 2, pinned: false, title: "Billing", heading: "Double charges", reference: "support:billing", text: PASSAGES[1].text },
     ]);
     expect(result.calls[0].usage).toMatchObject({ boostersUsd: 0.001, knowledgeTokens: 30 });
   });

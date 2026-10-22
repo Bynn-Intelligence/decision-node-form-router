@@ -1,4 +1,4 @@
-import { ChoiceAnswer, Image, ScoreAnswer, TruthAnswer, type Answer, type Decision, type Question } from "@decisionnode/sdk";
+import { ChoiceAnswer, Image, ScoreAnswer, TruthAnswer, type Answer, type Booster, type Decision, type Question } from "@decisionnode/sdk";
 import { URGENCY_LEVELS } from "../forms/common";
 import type { FormDef, Submission } from "../forms/types";
 import { MODEL_IDS, type ModelKey, type RouterConfig } from "./config";
@@ -14,7 +14,7 @@ export interface DecideParams {
   state: unknown;
   questions: Record<string, Question>;
   images?: Image[];
-  boosters?: ReturnType<typeof knowledgeBooster>[];
+  boosters?: Booster[];
   fallback?: boolean;
 }
 
@@ -224,7 +224,7 @@ function answeredCall(
       boostersUsd: cost?.boostersUsd ?? null,
       freeTier: cost?.freeTier ?? null,
     },
-    knowledge: knowledge ? (readKnowledge(d.raw) ?? { status: "missing", passages: [], warnings: [] }) : null,
+    knowledge: knowledge ? (readKnowledge(d) ?? { status: "missing", passages: [], warnings: [] }) : null,
     requestId: d.requestId,
     error: null,
   };

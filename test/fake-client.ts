@@ -31,8 +31,8 @@ export function truthAnswer(truth: number) {
 
 /** What a knowledge reading cites, as the API sends it with `include_text`. */
 export const PASSAGES = [
-  { n: 1, pinned: true, item: "itm_1", reference: "support/always", title: "Always", heading: "Locked accounts", text: "A locked account is critical.", rendered: true },
-  { n: 2, pinned: false, item: "itm_2", reference: "support/billing", title: "Billing", heading: "Double charges", text: "Double charges go to Billing.", rendered: true },
+  { n: 1, pinned: true, item: "itm_1", chunk: 0, byte_start: 0, byte_end: 29, reference: "support:always", title: "Always", heading: "Locked accounts", text: "A locked account is critical.", rendered: true },
+  { n: 2, pinned: false, item: "itm_2", chunk: 0, byte_start: 0, byte_end: 29, reference: "support:billing", title: "Billing", heading: "Double charges", text: "Double charges go to Billing.", rendered: true, score: 0.77 },
 ];
 
 /**
@@ -52,7 +52,7 @@ export function fakeDeciders(scripts: Partial<Record<ModelKey, Script>>, usage?:
         fallback: params.fallback,
         state: params.state,
         images: (params.images ?? []).map((i) => i.id),
-        boosters: params.boosters,
+        boosters: params.boosters === undefined ? undefined : JSON.parse(JSON.stringify(params.boosters)),
       });
       const script = scripts[key];
       if (script === undefined) throw new Error(`no script for ${key}`);
@@ -60,7 +60,7 @@ export function fakeDeciders(scripts: Partial<Record<ModelKey, Script>>, usage?:
       if (outcome instanceof Error) throw outcome;
       const answers = Object.fromEntries(questions.filter((q) => outcome[q]).map((q) => [q, outcome[q]]));
       const knowledge = params.boosters
-        ? { knowledge: { version: "knowledge-v1", status: "ok", billed_calls: 1, results: [{ warnings: [], passages: PASSAGES }] } }
+        ? { knowledge: { version: "knowledge-v1", status: "ok", billed_calls: 1, results: [{ collection: "col_test", warnings: [], passages: PASSAGES }] } }
         : undefined;
       return new Decision(
         {

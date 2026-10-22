@@ -27,16 +27,13 @@ async function main() {
   const apiKey = process.env.DECISIONNODE_API_KEY?.trim();
   if (!apiKey) fail("Set DECISIONNODE_API_KEY in .env.local first. Make a key at https://decisionnode.com/console/keys.");
 
-  const collections = new DecisionNode({ apiKey }).collections as unknown as Partial<KnowledgeApi>;
-  if (typeof collections.addDocument !== "function") {
-    fail("This needs @decisionnode/sdk 0.4.0 or later, which can write knowledge bases. Run pnpm install.");
-  }
+  const api: KnowledgeApi = new DecisionNode({ apiKey }).collections;
 
   const playbooks = readPlaybooks(join(ROOT, "knowledge"));
   console.log(`Loading ${playbooks.length} playbook documents for ${new Set(playbooks.map((p) => p.form)).size} forms.`);
 
   const report = await setupKnowledge({
-    api: collections as KnowledgeApi,
+    api,
     playbooks,
     baseId: process.env.ROUTER_KNOWLEDGE_BASE?.trim() || null,
     log: (line) => console.log(line),
