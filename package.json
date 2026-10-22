@@ -17,7 +17,7 @@
     "knowledge:setup": "tsx scripts/knowledge-setup.ts"
   },
   "dependencies": {
-    "@decisionnode/sdk": "0.4.0",
+    "@decisionnode/sdk": "^0.4.0",
     "@phosphor-icons/react": "2.1.10",
     "@react-email/render": "2.1.0",
     "next": "16.4.2",
