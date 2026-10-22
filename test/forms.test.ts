@@ -27,7 +27,7 @@ describe.each(FORM_IDS)("the %s form", (id) => {
     for (const field of form.fields.filter((f) => f.required)) {
       const parsed = parseSubmission(form, { ...form.samples[0].values, [field.name]: "  " });
       expect(parsed.ok).toBe(false);
-      if (!parsed.ok) expect(parsed.errors[field.name]).toBe(`${field.label} is required.`);
+      if (!parsed.ok) expect(parsed.errors[field.name]).toBe("This field is required.");
     }
   });
 
@@ -41,7 +41,7 @@ describe.each(FORM_IDS)("the %s form", (id) => {
   it("rejects an address that is not an email", () => {
     const parsed = parseSubmission(form, { ...form.samples[0].values, email: "not an email" });
     expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.errors.email).toMatch(/email address/);
+    if (!parsed.ok) expect(parsed.errors.email).toMatch(/Enter an email address/);
   });
 
   it("rejects a value outside a select's options", () => {

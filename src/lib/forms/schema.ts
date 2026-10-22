@@ -2,16 +2,16 @@ import { z } from "zod";
 import type { FieldDef, FormDef, Submission } from "./types";
 
 function fieldSchema(field: FieldDef) {
-  let text = z.string().trim().max(field.maxLength, `${field.label} is at most ${field.maxLength} characters.`);
-  if (field.required) text = text.min(1, `${field.label} is required.`);
+  let text = z.string().trim().max(field.maxLength, `Use at most ${field.maxLength.toLocaleString("en-US")} characters.`);
+  if (field.required) text = text.min(1, "This field is required.");
 
   if (field.kind === "email") {
-    const address = z.email(`${field.label} must be an email address.`).max(field.maxLength);
+    const address = z.email("Enter an email address, like name@example.com.").max(field.maxLength);
     return field.required ? text.pipe(address) : text.pipe(z.union([z.literal(""), address]));
   }
   if (field.kind === "select" && field.options) {
     const allowed = field.required ? field.options : ["", ...field.options];
-    return text.refine((v) => allowed.includes(v), `${field.label} must be one of the listed options.`);
+    return text.refine((v) => allowed.includes(v), "Pick one of the listed options.");
   }
   return text;
 }

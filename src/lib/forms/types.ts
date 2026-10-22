@@ -36,6 +36,8 @@ export interface UrgencyLevel {
 export interface FormDef {
   readonly id: string;
   readonly title: string;
+  /** The tab label on narrow screens. */
+  readonly shortTitle: string;
   readonly summary: string;
   /** What the form is, as the model reads it in the state. */
   readonly context: string;

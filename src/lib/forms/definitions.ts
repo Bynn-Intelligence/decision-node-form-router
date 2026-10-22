@@ -14,6 +14,7 @@ export const URGENCY_LEVELS: readonly UrgencyLevel[] = [
 const sales = {
   id: "sales",
   title: "Sales leads",
+  shortTitle: "Sales",
   summary: "A contact-sales form on a pricing page.",
   context: "A contact-sales form on the pricing page of a business software product.",
   fields: [
@@ -100,6 +101,7 @@ const sales = {
 const support = {
   id: "support",
   title: "Customer contact",
+  shortTitle: "Contact",
   summary: "A help form in the account area.",
   context: "The contact form in the account area of a subscription software product.",
   fields: [
@@ -177,6 +179,7 @@ const support = {
 const bugs = {
   id: "bugs",
   title: "Bug reports",
+  shortTitle: "Bugs",
   summary: "A bug report form linked from the app.",
   context: "The bug report form linked from the web and mobile apps of a software product with a public API.",
   fields: [
