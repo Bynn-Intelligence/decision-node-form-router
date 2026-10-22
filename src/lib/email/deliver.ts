@@ -1,6 +1,6 @@
 import type { FormDef, Submission } from "../forms/types";
 import type { RoutingResult } from "../router/types";
-import { buildEmail, type EmailMessage } from "./message";
+import { buildEmail, pictureFileName, type EmailMessage } from "./message";
 
 export interface EmailSettings {
   apiKey: string;
@@ -14,9 +14,15 @@ export function readEmailSettings(env: Record<string, string | undefined>): Emai
   return apiKey && from ? { apiKey, from } : null;
 }
 
+export interface Attachment {
+  filename: string;
+  /** Base64. */
+  content: string;
+}
+
 /** Sends one email; throws when it was not accepted. */
 export interface Sender {
-  send(message: EmailMessage & { from: string; to: string }): Promise<{ id: string }>;
+  send(message: EmailMessage & { from: string; to: string; files: Attachment[] }): Promise<{ id: string }>;
 }
 
 export type EmailOutcome =
@@ -45,7 +51,7 @@ export interface DeliverInput {
 export async function deliverEmail({ form, submission, result, optIn, settings, inbox, sender }: DeliverInput): Promise<EmailOutcome> {
   const message = await buildEmail(form, submission, result, inbox);
 
-  if (!result.deliver) return { status: "held", reason: "Held as spam, so no email is sent.", message };
+  if (!result.outcome.deliver) return { status: "held", reason: "Held, so no email is sent.", message };
   if (!settings || !sender) {
     return { status: "preview", reason: "Email is off: set RESEND_API_KEY and RESEND_FROM to send it.", message };
   }
@@ -53,13 +59,14 @@ export async function deliverEmail({ form, submission, result, optIn, settings, 
   if (!inbox) {
     return {
       status: "preview",
-      reason: `Not sent: no inbox is set for ${result.destination.teamName} in src/lib/email/inboxes.ts.`,
+      reason: `Not sent: no inbox is set for ${result.outcome.teamName} in src/lib/email/inboxes.ts.`,
       message,
     };
   }
 
   try {
-    const { id } = await sender.send({ ...message, from: settings.from, to: inbox });
+    const files = submission.pictures.map((p) => ({ filename: pictureFileName(p), content: p.base64 }));
+    const { id } = await sender.send({ ...message, from: settings.from, to: inbox, files });
     return { status: "sent", id, message };
   } catch (err) {
     const detail = err instanceof Error && err.message ? `: ${err.message}` : "";

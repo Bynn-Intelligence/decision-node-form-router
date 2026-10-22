@@ -32,6 +32,8 @@ export interface RouterConfig {
   apiKey: string;
   models: readonly ModelKey[];
   threshold: number;
+  /** The knowledge base with the routing rules; `null` routes on the team criteria alone. */
+  knowledgeBase: string | null;
 }
 
 export type ConfigResult =
@@ -67,11 +69,13 @@ export function readConfig(env: Env): ConfigResult {
     else problems.push(`ROUTER_THRESHOLD is "${env.ROUTER_THRESHOLD}"; use a number from 0 to 1, such as 0.7.`);
   }
 
+  const knowledgeBase = blank(env.ROUTER_KNOWLEDGE_BASE) ? null : env.ROUTER_KNOWLEDGE_BASE!.trim();
+
   if (problems.length > 0) return { ok: false, reason: "invalid", problems };
-  return { ok: true, config: { apiKey, models, threshold } };
+  return { ok: true, config: { apiKey, models, threshold, knowledgeBase } };
 }
 
 /** The settings without the key, safe to show in the page. */
 export function publicSettings(config: RouterConfig) {
-  return { models: [...config.models], threshold: config.threshold };
+  return { models: [...config.models], threshold: config.threshold, knowledge: config.knowledgeBase !== null };
 }

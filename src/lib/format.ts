@@ -18,20 +18,29 @@ export function formatConfidence(n: number): string {
   return n.toFixed(2);
 }
 
-export function formatTokens(input: number | null, output: number | null): string | null {
-  if (input === null && output === null) return null;
-  const parts = [];
-  if (input !== null) parts.push(`${whole.format(input)} in`);
-  if (output !== null) parts.push(`${whole.format(output)} out`);
-  return `${parts.join(", ")} tokens`;
+export function formatInt(n: number): string {
+  return whole.format(n);
 }
 
-/** What one call cost: the API's own amount when it sent one, else its tokens. */
+/** A call's tokens: input (pictures and the rules' passages included) and the rules' share. */
+export function formatTokens(call: CallRecord): string | null {
+  const u = call.usage;
+  if (!u || u.inputTokens === null) return null;
+  const parts = [`${whole.format(u.inputTokens)} tokens in`];
+  if (u.knowledgeTokens) parts.push(`${whole.format(u.knowledgeTokens)} of them rules`);
+  return parts.join(", ");
+}
+
+/** What one call cost: the API's own amount when it sent one, with the knowledge call's part; else its tokens. */
 export function formatCallCost(call: CallRecord): string {
-  if (!call.usage) return "Not billed";
-  if (call.usage.freeTier) return "Free tier";
-  if (call.usage.costUsd !== null) return formatUsd(call.usage.costUsd);
-  return formatTokens(call.usage.inputTokens, call.usage.outputTokens) ?? "No usage sent";
+  const u = call.usage;
+  if (!u) return "Not billed";
+  if (u.costUsd !== null) {
+    const total = u.freeTier && u.costUsd === 0 ? "Free tier" : formatUsd(u.costUsd);
+    if (u.boostersUsd && u.modelUsd !== null) return `${total}: model ${formatUsd(u.modelUsd)}, knowledge ${formatUsd(u.boostersUsd)}`;
+    return total;
+  }
+  return formatTokens(call) ?? "No usage sent";
 }
 
 /** The sum of the calls' costs, only when every answered call carried one. */
@@ -46,14 +55,10 @@ export function totalCost(calls: CallRecord[]): number | null {
   return sum;
 }
 
-export function totalTokens(calls: CallRecord[]): string | null {
+export function totalTokens(calls: CallRecord[]): number | null {
   let input: number | null = null;
-  let output: number | null = null;
-  for (const c of calls) {
-    if (c.usage?.inputTokens != null) input = (input ?? 0) + c.usage.inputTokens;
-    if (c.usage?.outputTokens != null) output = (output ?? 0) + c.usage.outputTokens;
-  }
-  return formatTokens(input, output);
+  for (const c of calls) if (c.usage?.inputTokens != null) input = (input ?? 0) + c.usage.inputTokens;
+  return input;
 }
 
 export function describeModels(models: readonly ModelKey[]): string {

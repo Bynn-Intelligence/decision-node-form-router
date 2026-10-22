@@ -1,4 +1,5 @@
 import { render, toPlainText } from "@react-email/render";
+import { textFields } from "../forms/schema";
 import type { FormDef, Submission } from "../forms/types";
 import { MODEL_NAMES } from "../router/config";
 import type { QuestionResult, RoutingResult } from "../router/types";
@@ -11,40 +12,50 @@ export interface EmailMessage {
   replyTo: string;
   html: string;
   text: string;
+  /** The pictures' file names; the pictures go as attachments. */
+  attachments: string[];
 }
 
 const font = "Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif";
 const cell = { padding: "6px 0", verticalAlign: "top" as const, fontSize: "14px", lineHeight: "20px" };
+const EXTENSIONS = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as const;
 
 function settledBy(q: QuestionResult): string {
   return q.settledBy === "safe" ? "safe action" : MODEL_NAMES[q.settledBy];
 }
 
-export function urgencyLabel(result: RoutingResult): string {
-  const u = result.questions.urgency.final;
-  return u.kind === "urgency" ? u.label : "Unsure";
+/** One question's final answer in words. */
+export function answerLabel(q: QuestionResult): string {
+  const f = q.final;
+  if (f.kind === "destination") return f.teamName;
+  if (f.kind === "urgency") return f.label;
+  return f.value === null ? "Unsure, review it" : f.label;
 }
 
-export function spamLabel(result: RoutingResult): string {
-  const s = result.questions.spam.final;
-  if (s.kind !== "spam") return "Not checked";
-  if (s.review) return "Unsure, review it";
-  return s.spam ? "Spam" : "Not spam";
+export function urgencyLabel(result: RoutingResult): string | null {
+  const u = result.questions.find((q) => q.kind === "urgency");
+  return u ? answerLabel(u) : null;
 }
 
-function headline(form: FormDef, submission: Submission): string {
-  const text = submission.subject || submission.message || submission.description || "New submission";
-  // one line, with no control characters, since it becomes the subject
+/** The submission's subject line, its first line, without control characters, at most 72 characters. */
+function headline(submission: Submission): string {
+  const v = submission.values;
+  const text = v.subject || v.message || v.description || v.problem || v.reason || v.report || `Submission from ${v.name || v.full_name || "a visitor"}`;
   const line = text.split(/\r?\n/)[0].replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
   return line.length > 72 ? `${line.slice(0, 71).trimEnd()}...` : line;
 }
 
+export function pictureFileName(p: Submission["pictures"][number]): string {
+  return `${p.id}.${EXTENSIONS[p.mediaType]}`;
+}
+
 export function RoutedSubmission({ form, submission, result }: { form: FormDef; submission: Submission; result: RoutingResult }) {
-  const rows: [string, string][] = [
-    ["Team", result.destination.teamName],
-    ["Urgency", urgencyLabel(result)],
-    ["Spam check", spamLabel(result)],
-  ];
+  const { outcome } = result;
+  const rows: [string, string][] = [["Goes to", outcome.queue]];
+  if (outcome.nextStep) rows.push(["Next step", outcome.nextStep]);
+  for (const q of result.questions) rows.push([q.title, answerLabel(q)]);
+  const name = submission.values.name || submission.values.full_name || "the sender";
+
   return (
     <html lang="en">
       {/* an email document, not a Next.js page */}
@@ -59,35 +70,44 @@ export function RoutedSubmission({ form, submission, result }: { form: FormDef; 
             <tr>
               <td style={{ background: "#ffffff", borderRadius: "12px", padding: "28px", border: "1px solid #e3e5df" }}>
                 <p style={{ margin: "0 0 4px", fontSize: "13px", color: "#4b5057" }}>{form.title}</p>
-                <h1 style={{ margin: "0 0 20px", fontSize: "20px", lineHeight: "28px", fontWeight: 600 }}>
-                  {headline(form, submission)}
-                </h1>
+                <h1 style={{ margin: "0 0 20px", fontSize: "20px", lineHeight: "28px", fontWeight: 600 }}>{headline(submission)}</h1>
                 <table role="presentation" width="100%" cellPadding={0} cellSpacing={0}>
                   <tbody>
                     {rows.map(([label, value]) => (
                       <tr key={label}>
-                        <td style={{ ...cell, width: "130px", color: "#4b5057" }}>{label}</td>
+                        <td style={{ ...cell, width: "150px", color: "#4b5057" }}>{label}</td>
                         <td style={{ ...cell, fontWeight: 600 }}>{value}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                {outcome.notes.length > 0 && (
+                  <p style={{ margin: "16px 0 0", fontSize: "14px", lineHeight: "20px", color: "#7a4b00" }}>
+                    {outcome.notes.join(" ")}
+                  </p>
+                )}
                 <hr style={{ border: "none", borderTop: "1px solid #e3e5df", margin: "20px 0" }} />
                 <table role="presentation" width="100%" cellPadding={0} cellSpacing={0}>
                   <tbody>
-                    {form.fields.map((field) => (
+                    {textFields(form).map((field) => (
                       <tr key={field.name}>
-                        <td style={{ ...cell, width: "130px", color: "#4b5057" }}>{field.label}</td>
-                        <td style={{ ...cell, whiteSpace: "pre-wrap" }}>{submission[field.name] || "Not given"}</td>
+                        <td style={{ ...cell, width: "150px", color: "#4b5057" }}>{field.label}</td>
+                        <td style={{ ...cell, whiteSpace: "pre-wrap" }}>{submission.values[field.name] || "Not given"}</td>
                       </tr>
                     ))}
+                    {submission.pictures.length > 0 && (
+                      <tr>
+                        <td style={{ ...cell, width: "150px", color: "#4b5057" }}>Pictures</td>
+                        <td style={cell}>{submission.pictures.map(pictureFileName).join(", ")}, attached</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
                 <hr style={{ border: "none", borderTop: "1px solid #e3e5df", margin: "20px 0" }} />
                 <p style={{ margin: 0, fontSize: "12px", lineHeight: "18px", color: "#4b5057" }}>
-                  Routed by the DecisionNode form router. Team: {settledBy(result.questions.destination)}. Urgency:{" "}
-                  {settledBy(result.questions.urgency)}. Spam check: {settledBy(result.questions.spam)}. Reply to this
-                  email to answer {submission.name || "the sender"}.
+                  Routed by the DecisionNode form router
+                  {result.knowledge ? ", following your routing rules" : ""}.{" "}
+                  {result.questions.map((q) => `${q.title}: ${settledBy(q)}.`).join(" ")} Reply to this email to answer {name}.
                 </p>
               </td>
             </tr>
@@ -106,11 +126,13 @@ export async function buildEmail(
   to: string | null,
 ): Promise<EmailMessage> {
   const html = await render(<RoutedSubmission form={form} submission={submission} result={result} />);
+  const urgency = urgencyLabel(result);
   return {
-    subject: `[${urgencyLabel(result)}] ${form.title}: ${headline(form, submission)}`,
+    subject: `${urgency ? `[${urgency}] ` : ""}${form.title}: ${headline(submission)}`,
     to,
-    replyTo: submission.email,
+    replyTo: submission.values.email,
     html,
     text: toPlainText(html),
+    attachments: submission.pictures.map(pictureFileName),
   };
 }

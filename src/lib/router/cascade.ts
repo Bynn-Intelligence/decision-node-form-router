@@ -1,28 +1,26 @@
-import { ChoiceAnswer, ScoreAnswer, TruthAnswer, type Answer, type Decision } from "@decisionnode/sdk";
-import { URGENCY_LEVELS } from "../forms/definitions";
+import { ChoiceAnswer, Image, ScoreAnswer, TruthAnswer, type Answer, type Decision, type Question } from "@decisionnode/sdk";
+import { URGENCY_LEVELS } from "../forms/common";
 import type { FormDef, Submission } from "../forms/types";
 import { MODEL_IDS, type ModelKey, type RouterConfig } from "./config";
 import { confidenceOf, isSure } from "./confidence";
 import { describeError } from "./errors";
-import { QUESTION_IDS, buildQuestions, buildState, type QuestionId, type RouterQuestions } from "./questions";
-import type {
-  AnswerView,
-  Attempt,
-  CallRecord,
-  FinalAnswer,
-  QuestionResult,
-  RouteOutcome,
-  SafeAction,
-} from "./types";
+import { knowledgeBooster, readKnowledge } from "./knowledge";
+import { buildQuestions, buildState, questionsFor, type AskedQuestion } from "./questions";
+import type { AnswerView, Attempt, CallRecord, FinalAnswer, Outcome, QuestionResult, RouteOutcome } from "./types";
+
+/** What the router sends in one call. */
+export interface DecideParams {
+  model: string;
+  state: unknown;
+  questions: Record<string, Question>;
+  images?: Image[];
+  boosters?: ReturnType<typeof knowledgeBooster>[];
+  fallback?: boolean;
+}
 
 /** The part of the SDK client the router uses, so tests can pass a fake. */
 export interface Decider {
-  decide(params: {
-    model: string;
-    state: unknown;
-    questions: Partial<RouterQuestions>;
-    fallback?: boolean;
-  }): Promise<Decision>;
+  decide(params: DecideParams): Promise<Decision>;
 }
 
 export type Deciders = Record<ModelKey, Decider>;
@@ -30,35 +28,35 @@ export type Deciders = Record<ModelKey, Decider>;
 export interface RouteInput {
   form: FormDef;
   submission: Submission;
-  config: Pick<RouterConfig, "models" | "threshold">;
+  config: Pick<RouterConfig, "models" | "threshold" | "knowledgeBase">;
   clients: Deciders;
   /** Milliseconds, for measuring each call. Default: `performance.now`. */
   now?: () => number;
-}
-
-interface Settled {
-  model: ModelKey;
-  answer: AnswerView;
 }
 
 /**
  * Routes one submission through the cascade. Every question goes to the first
  * model; each one it is unsure of goes on to the next, alone with the other
  * unsure ones. An answer at or above the threshold is final. A question no
- * model was sure of takes the form's safe action.
+ * model was sure of takes the form's safe action. With a knowledge base, every
+ * call reads the form's routing rules, and fails rather than route without them.
  */
 export async function route({ form, submission, config, clients, now = () => performance.now() }: RouteInput): Promise<RouteOutcome> {
+  const asked = questionsFor(form, submission.pictures.length > 0);
+  const byId = new Map(asked.map((q) => [q.id, q]));
   const state = buildState(form, submission);
-  const questions = buildQuestions(form);
-  const attempts: Record<QuestionId, Attempt[]> = { destination: [], urgency: [], spam: [] };
-  const settled: Partial<Record<QuestionId, Settled>> = {};
+  const questions = buildQuestions(form, asked);
+  const images = submission.pictures.map((p) => Image.fromBase64(p.id, p.base64, p.mediaType));
+  const boosters = config.knowledgeBase ? [knowledgeBooster(config.knowledgeBase, form.id)] : undefined;
+
+  const attempts = new Map<string, Attempt[]>(asked.map((q) => [q.id, []]));
+  const settled = new Map<string, { model: ModelKey; answer: AnswerView }>();
   const calls: CallRecord[] = [];
-  let pending: QuestionId[] = [...QUESTION_IDS];
+  let pending = asked.map((q) => q.id);
 
   for (const [i, model] of config.models.entries()) {
     if (pending.length === 0) break;
     const last = i === config.models.length - 1;
-    const asked = Object.fromEntries(pending.map((id) => [id, questions[id]])) as Partial<RouterQuestions>;
     const start = now();
 
     let decision: Decision;
@@ -66,47 +64,46 @@ export async function route({ form, submission, config, clients, now = () => per
       decision = await clients[model].decide({
         model: MODEL_IDS[model],
         state,
-        questions: asked,
+        questions: Object.fromEntries(pending.map((id) => [id, questions[id]])),
+        ...(images.length > 0 ? { images } : {}),
+        ...(boosters ? { boosters } : {}),
         // the re-check must come from the full model, never from Flash in its place
         ...(model === "moe" ? { fallback: false } : {}),
       });
     } catch (err) {
       const error = describeError(model, err);
-      calls.push(failedCall(model, pending, now() - start, err, error));
-      // Flash failing hands its questions to the next model; the last model failing fails the routing
-      if (!last && model === "flash") continue;
+      calls.push(failedCall(model, pending, submission.pictures.length, now() - start, err, error));
+      // Flash failing hands its questions to the next model, unless every model would fail alike
+      if (!last && model === "flash" && error.passOn) continue;
       return { ok: false, error: { message: error.message, retryable: error.retryable, calls } };
     }
 
     const call = calls.length;
-    calls.push(answeredCall(model, pending, now() - start, decision));
+    calls.push(answeredCall(model, pending, submission.pictures.length, now() - start, decision, boosters !== undefined));
 
-    const stillUnsure: QuestionId[] = [];
+    const stillUnsure: string[] = [];
     for (const id of pending) {
       const raw = decision.answers[id] as Answer | undefined;
-      const answer = view(form, id, raw);
+      const answer = view(form, byId.get(id)!, raw);
       const confidence = answer.kind === "destination_unregistered" || answer.kind === "none" ? 0 : confidenceOf(raw);
       const sure = isSure(confidence, config.threshold);
-      attempts[id].push({ model, call, answer, confidence, sure });
-      if (sure) settled[id] = { model, answer };
+      attempts.get(id)!.push({ model, call, answer, confidence, sure });
+      if (sure) settled.set(id, { model, answer });
       else stillUnsure.push(id);
     }
     pending = stillUnsure;
   }
 
-  const results = {} as Record<QuestionId, QuestionResult>;
-  for (const id of QUESTION_IDS) {
-    const done = settled[id];
+  const results: QuestionResult[] = asked.map((q) => {
+    const done = settled.get(q.id);
+    const base = { id: q.id, kind: q.kind, title: q.title, attempts: attempts.get(q.id)! };
     if (done) {
-      results[id] = { id, attempts: attempts[id], final: finalOf(done.answer), settledBy: done.model, safeAction: null };
-    } else {
-      const safe = safeActionFor(form, id);
-      results[id] = { id, attempts: attempts[id], final: safeFinal(safe), settledBy: "safe", safeAction: safe };
+      const final = finalOf(done.answer, q);
+      return { ...base, final, settledBy: done.model, safeAction: null, note: noteOf(final, q) };
     }
-  }
-
-  const destination = results.destination.final as Extract<FinalAnswer, { kind: "destination" }>;
-  const spam = results.spam.final as Extract<FinalAnswer, { kind: "spam" }>;
+    const { final, safeAction } = safeFor(form, q);
+    return { ...base, final, settledBy: "safe" as const, safeAction, note: null };
+  });
 
   return {
     ok: true,
@@ -114,75 +111,120 @@ export async function route({ form, submission, config, clients, now = () => per
       formId: form.id,
       threshold: config.threshold,
       models: [...config.models],
+      knowledge: boosters !== undefined,
       questions: results,
       calls,
-      settledByFlash: QUESTION_IDS.filter((id) => results[id].settledBy === "flash").length,
-      safeActionTaken: QUESTION_IDS.some((id) => results[id].settledBy === "safe"),
-      destination: { teamId: destination.teamId, teamName: destination.teamName },
-      deliver: !spam.spam,
+      settledByFlash: results.filter((r) => r.settledBy === "flash").length,
+      safeActionTaken: results.some((r) => r.settledBy === "safe"),
+      outcome: outcomeOf(form, results),
     },
   };
 }
 
-/** What the result does with a question no model was sure of. */
-export function safeActionFor(form: FormDef, id: QuestionId): SafeAction {
-  if (id === "destination") {
+/** The safe action of a question no model was sure of. */
+export function safeFor(form: FormDef, q: AskedQuestion): { final: FinalAnswer; safeAction: string } {
+  if (q.kind === "destination") {
     const team = form.teams.find((t) => t.id === form.triageTeam)!;
-    return { question: "destination", teamId: team.id, teamName: team.name };
+    return {
+      final: { kind: "destination", teamId: team.id, teamName: team.name },
+      safeAction: `Sent to ${team.name}, the team for what no model is sure of.`,
+    };
   }
-  return { question: id };
+  if (q.kind === "urgency") {
+    return { final: { kind: "urgency", label: "Unsure", level: null }, safeAction: "Urgency is shown as unsure." };
+  }
+  // never silently dropped: an unsure check lets the submission through and marks it for review
+  return {
+    final: { kind: "flag", value: null, label: "Unsure", raised: false },
+    safeAction: `${q.title}: unsure, so the submission goes through and is marked for review.`,
+  };
 }
 
-function safeFinal(safe: SafeAction): FinalAnswer {
-  if (safe.question === "destination") return { kind: "destination", teamId: safe.teamId, teamName: safe.teamName };
-  if (safe.question === "urgency") return { kind: "urgency", label: "Unsure", level: null };
-  // never silently dropped: an unsure spam check is delivered and marked for review
-  return { kind: "spam", spam: false, review: true };
-}
-
-function finalOf(answer: AnswerView): FinalAnswer {
+function finalOf(answer: AnswerView, q: AskedQuestion): FinalAnswer {
   switch (answer.kind) {
     case "destination":
       return { kind: "destination", teamId: answer.teamId, teamName: answer.teamName };
     case "urgency":
       return { kind: "urgency", label: answer.label, level: answer.level };
-    case "spam":
-      return { kind: "spam", spam: answer.spam, review: false };
+    case "flag":
+      return { kind: "flag", value: answer.value, label: answer.label, raised: answer.value === q.flag!.flagWhen };
     default:
       throw new Error(`an answer of kind ${answer.kind} cannot be final`);
   }
 }
 
-function view(form: FormDef, id: QuestionId, raw: Answer | undefined): AnswerView {
-  if (id === "destination" && raw instanceof ChoiceAnswer) {
+function noteOf(final: FinalAnswer, q: AskedQuestion): string | null {
+  return final.kind === "flag" && final.raised ? q.flag!.flagNote : null;
+}
+
+function outcomeOf(form: FormDef, results: QuestionResult[]): Outcome {
+  const dest = results.find((r) => r.kind === "destination")!.final as Extract<FinalAnswer, { kind: "destination" }>;
+  const team = form.teams.find((t) => t.id === dest.teamId)!;
+  let deliver = true;
+  let nextStep: string | null = null;
+  let review = false;
+  const notes: string[] = [];
+  for (const r of results) {
+    if (r.kind !== "flag") continue;
+    const flag = form.flags.find((f) => f.id === r.id)!;
+    if (r.settledBy === "safe") {
+      review = true;
+      if (r.safeAction) notes.push(r.safeAction);
+      continue;
+    }
+    if (r.final.kind !== "flag" || !r.final.raised) continue;
+    notes.push(flag.flagNote);
+    if (flag.effect.kind === "hold") deliver = false;
+    else if (flag.effect.kind === "review") review = true;
+    else nextStep ??= flag.effect.outcome;
+  }
+  return { teamId: team.id, teamName: team.name, queue: team.queue ?? team.name, deliver, nextStep, notes, review };
+}
+
+function view(form: FormDef, q: AskedQuestion, raw: Answer | undefined): AnswerView {
+  if (q.kind === "destination" && raw instanceof ChoiceAnswer) {
     const team = form.teams.find((t) => t.id === raw.choice);
     return team
       ? { kind: "destination", teamId: team.id, teamName: team.name }
       : { kind: "destination_unregistered", value: String(raw.choice) };
   }
-  if (id === "urgency" && raw instanceof ScoreAnswer && Number.isFinite(raw.score)) {
+  if (q.kind === "urgency" && raw instanceof ScoreAnswer && Number.isFinite(raw.score)) {
     const level = Math.min(URGENCY_LEVELS.length - 1, Math.max(0, Math.round(raw.score)));
     return { kind: "urgency", level, label: URGENCY_LEVELS[level].label, score: raw.score };
   }
-  if (id === "spam" && raw instanceof TruthAnswer && Number.isFinite(raw.truth)) {
-    return { kind: "spam", probability: raw.truth, spam: raw.truth >= 0.5 };
+  if (q.kind === "flag" && raw instanceof TruthAnswer && Number.isFinite(raw.truth)) {
+    const value = raw.truth >= 0.5;
+    return { kind: "flag", probability: raw.truth, value, label: value ? q.flag!.trueLabel : q.flag!.falseLabel };
   }
   return { kind: "none" };
 }
 
-function answeredCall(model: ModelKey, questions: QuestionId[], elapsedMs: number, d: Decision): CallRecord {
+function answeredCall(
+  model: ModelKey,
+  questions: string[],
+  pictures: number,
+  elapsedMs: number,
+  d: Decision,
+  knowledge: boolean,
+): CallRecord {
+  const cost = d.usage.cost;
   return {
     model,
     version: d.model ?? null,
     questions: [...questions],
+    pictures,
     elapsedMs: Math.round(elapsedMs),
     serverMs: d.latencyMs,
     usage: {
       inputTokens: d.usage.inputTokens,
       outputTokens: d.usage.outputTokens,
-      costUsd: d.usage.cost?.usd ?? null,
-      freeTier: d.usage.cost?.freeTier ?? null,
+      knowledgeTokens: d.usage.boosterTokens,
+      costUsd: cost?.usd ?? null,
+      modelUsd: cost?.modelUsd ?? null,
+      boostersUsd: cost?.boostersUsd ?? null,
+      freeTier: cost?.freeTier ?? null,
     },
+    knowledge: knowledge ? (readKnowledge(d.raw) ?? { status: "missing", passages: [], warnings: [] }) : null,
     requestId: d.requestId,
     error: null,
   };
@@ -190,20 +232,23 @@ function answeredCall(model: ModelKey, questions: QuestionId[], elapsedMs: numbe
 
 function failedCall(
   model: ModelKey,
-  questions: QuestionId[],
+  questions: string[],
+  pictures: number,
   elapsedMs: number,
   err: unknown,
-  error: CallRecord["error"],
+  error: { message: string; retryable: boolean },
 ): CallRecord {
   const requestId = err && typeof err === "object" && "requestId" in err ? (err.requestId as string | null) : null;
   return {
     model,
     version: null,
     questions: [...questions],
+    pictures,
     elapsedMs: Math.round(elapsedMs),
     serverMs: null,
     usage: null,
+    knowledge: null,
     requestId,
-    error,
+    error: { message: error.message, retryable: error.retryable },
   };
 }

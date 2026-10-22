@@ -1,38 +1,74 @@
 "use client";
 
-import { ArrowRight, CircleNotch } from "@phosphor-icons/react";
-import { useActionState } from "react";
+import { ArrowRight, CircleNotch, Info } from "@phosphor-icons/react";
+import { useActionState, useEffect, useState } from "react";
 import { routeSubmission } from "@/app/actions";
 import { FORMS, type FormId } from "@/lib/forms/definitions";
-import type { FieldDef } from "@/lib/forms/types";
+import type { FieldDef, FormDef, SampleDef } from "@/lib/forms/types";
 import type { SubmitState } from "@/lib/submit";
+import { PictureField } from "./PictureField";
+import { samplePicture } from "./pictures";
 import { ResultPanel } from "./ResultPanel";
-import type { RouterSettings } from "./Router";
+import type { RouterSettings } from "./settings";
 
 const IDLE: SubmitState = { status: "idle" };
 
 const control =
   "w-full rounded-lg border border-control bg-page px-3 py-2.5 text-[15px] text-text transition-colors duration-200 hover:border-muted aria-[invalid=true]:border-coral";
 
-interface WorkspaceProps {
-  formId: FormId;
-  values: Record<string, string>;
-  onValues: (values: Record<string, string>) => void;
-  settings: RouterSettings;
+type Files = Record<string, File[]>;
+
+async function sampleFiles(sample: SampleDef): Promise<Files> {
+  const out: Files = {};
+  for (const [field, paths] of Object.entries(sample.pictures ?? {})) {
+    out[field] = await Promise.all(paths.map(samplePicture));
+  }
+  return out;
 }
 
 /** One form and the result of its last submit. */
-export function Workspace({ formId, values, onValues, settings }: WorkspaceProps) {
-  const form = FORMS[formId];
-  const [state, action, pending] = useActionState(routeSubmission, IDLE);
+export function Workspace({ formId, settings }: { formId: FormId; settings: RouterSettings }) {
+  const form: FormDef = FORMS[formId];
+  const [values, setValues] = useState<Record<string, string>>(() => ({ ...form.samples[0].values }));
+  const [files, setFiles] = useState<Files>({});
+  const [state, formAction, pending] = useActionState(routeSubmission, IDLE);
   const errors = state.status === "invalid" ? state.errors : {};
   const formDomId = `form-${formId}`;
+
+  async function loadSample(sample: SampleDef) {
+    setValues({ ...sample.values });
+    setFiles({});
+    try {
+      setFiles(await sampleFiles(sample));
+    } catch {
+      // a missing sample picture leaves the field empty to fill by hand
+    }
+  }
+
+  useEffect(() => {
+    let live = true;
+    sampleFiles(form.samples[0])
+      .then((f) => live && setFiles(f))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [form]);
+
+  function send(formData: FormData) {
+    for (const field of form.fields) {
+      if (field.kind !== "pictures") continue;
+      formData.delete(field.name);
+      for (const file of files[field.name] ?? []) formData.append(field.name, file);
+    }
+    formAction(formData);
+  }
 
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
       <form
         id={formDomId}
-        action={action}
+        action={send}
         noValidate
         aria-describedby={`${formDomId}-summary`}
         className="rounded-2xl border border-line bg-panel p-5 sm:p-6"
@@ -42,6 +78,12 @@ export function Workspace({ formId, values, onValues, settings }: WorkspaceProps
         <p id={`${formDomId}-summary`} className="mt-1 text-sm text-muted">
           {form.summary} Every field can be edited.
         </p>
+        {form.notice && (
+          <p className="mt-3 flex items-start gap-2 rounded-lg bg-raised px-3 py-2.5 text-sm leading-relaxed text-muted">
+            <Info size={18} weight="light" className="mt-0.5 shrink-0 text-text" aria-hidden />
+            {form.notice}
+          </p>
+        )}
 
         <fieldset className="mt-5">
           <legend className="text-sm text-muted">Fill with a sample</legend>
@@ -50,7 +92,7 @@ export function Workspace({ formId, values, onValues, settings }: WorkspaceProps
               <button
                 key={sample.kind}
                 type="button"
-                onClick={() => onValues({ ...sample.values })}
+                onClick={() => loadSample(sample)}
                 className="rounded-full border border-control px-3 py-1.5 text-sm text-text transition-[border-color,transform] duration-200 ease-out-soft hover:border-lime active:scale-[0.98]"
               >
                 {sample.label}
@@ -60,16 +102,26 @@ export function Workspace({ formId, values, onValues, settings }: WorkspaceProps
         </fieldset>
 
         <div className="mt-6 space-y-5">
-          {form.fields.map((field) => (
-            <Field
-              key={field.name}
-              formId={formId}
-              field={field}
-              value={values[field.name] ?? ""}
-              error={errors[field.name]}
-              onChange={(v) => onValues({ ...values, [field.name]: v })}
-            />
-          ))}
+          {form.fields.map((field) =>
+            field.kind === "pictures" ? (
+              <PictureField
+                key={field.name}
+                field={field}
+                files={files[field.name] ?? []}
+                error={errors[field.name]}
+                onFiles={(next) => setFiles((all) => ({ ...all, [field.name]: next }))}
+              />
+            ) : (
+              <Field
+                key={field.name}
+                formId={formId}
+                field={field}
+                value={values[field.name] ?? ""}
+                error={errors[field.name]}
+                onChange={(v) => setValues((all) => ({ ...all, [field.name]: v }))}
+              />
+            ),
+          )}
         </div>
 
         {errors._form && (
@@ -109,7 +161,7 @@ export function Workspace({ formId, values, onValues, settings }: WorkspaceProps
         </button>
       </form>
 
-      <ResultPanel state={state} pending={pending} formDomId={formDomId} settings={settings} />
+      <ResultPanel form={form} state={state} pending={pending} formDomId={formDomId} settings={settings} />
     </div>
   );
 }
@@ -160,7 +212,7 @@ function Field({
         <input
           {...common}
           type={field.kind === "email" ? "email" : "text"}
-          autoComplete={field.kind === "email" ? "email" : field.name === "name" ? "name" : "off"}
+          autoComplete={field.kind === "email" ? "email" : field.name === "name" || field.name === "full_name" ? "name" : "off"}
           maxLength={field.maxLength}
           onChange={(e) => onChange(e.target.value)}
         />

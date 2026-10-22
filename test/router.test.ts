@@ -1,23 +1,41 @@
-import { ConnectionError, OverloadedError, ScoreAnswer, TimeoutError, TruthAnswer, ChoiceAnswer } from "@decisionnode/sdk";
+import { ChoiceAnswer, ConnectionError, OverloadedError, ScoreAnswer, TimeoutError, TruthAnswer, DecisionNodeError } from "@decisionnode/sdk";
 import { describe, expect, it } from "vitest";
 import { FORMS } from "@/lib/forms/definitions";
+import type { Picture, Submission } from "@/lib/forms/types";
 import { route } from "@/lib/router/cascade";
 import { confidenceOf, isSure } from "@/lib/router/confidence";
 import { readConfig, type ModelKey } from "@/lib/router/config";
-import { buildQuestions, buildState } from "@/lib/router/questions";
-import { choiceAnswer, fakeDeciders, scoreAnswer, truthAnswer, type WireAnswers } from "./fake-client";
+import { buildQuestions, buildState, questionsFor } from "@/lib/router/questions";
+import type { RoutingResult } from "@/lib/router/types";
+import { PASSAGES, choiceAnswer, fakeDeciders, scoreAnswer, truthAnswer, type WireAnswers } from "./fake-client";
 
 const form = FORMS.support;
-const submission = { ...form.samples[0].values };
+const textOnly: Submission = { values: { ...form.samples[0].values }, pictures: [] };
+const picture: Picture = { id: "screenshot_1", field: "screenshots", mediaType: "image/png", base64: "iVBORw0KGgo=", bytes: 8 };
+const withPicture: Submission = { ...textOnly, pictures: [picture] };
+
 const sure: WireAnswers = {
-  destination: choiceAnswer("billing", 0.93),
+  team: choiceAnswer("billing", 0.93),
   urgency: scoreAnswer(2.1, 0.81),
   spam: truthAnswer(0.02),
+  matches: truthAnswer(0.95),
 };
 
-function run(scripts: Parameters<typeof fakeDeciders>[0], models: ModelKey[] = ["flash", "moe"], threshold = 0.7) {
+interface RunOptions {
+  models?: ModelKey[];
+  threshold?: number;
+  knowledgeBase?: string | null;
+  submission?: Submission;
+}
+
+function run(scripts: Parameters<typeof fakeDeciders>[0], opts: RunOptions = {}) {
   const fake = fakeDeciders(scripts);
-  const outcome = route({ form, submission, config: { models, threshold }, clients: fake.clients });
+  const outcome = route({
+    form,
+    submission: opts.submission ?? textOnly,
+    config: { models: opts.models ?? ["flash", "moe"], threshold: opts.threshold ?? 0.7, knowledgeBase: opts.knowledgeBase ?? null },
+    clients: fake.clients,
+  });
   return { outcome, calls: fake.calls };
 }
 
@@ -25,6 +43,12 @@ async function ok(p: ReturnType<typeof run>) {
   const outcome = await p.outcome;
   if (!outcome.ok) throw new Error(`expected a result, got ${outcome.error.message}`);
   return { result: outcome.result, calls: p.calls };
+}
+
+function q(result: RoutingResult, id: string) {
+  const found = result.questions.find((x) => x.id === id);
+  if (!found) throw new Error(`no question ${id}`);
+  return found;
 }
 
 describe("confidence", () => {
@@ -55,92 +79,72 @@ describe("the cascade", () => {
   it("settles every question on Flash when it is sure", async () => {
     const { result, calls } = await ok(run({ flash: sure, moe: new Error("must not be called") }));
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ model: "decisionnode-flash", questions: ["destination", "urgency", "spam"] });
+    expect(calls[0]).toMatchObject({ model: "decisionnode-flash", questions: ["team", "urgency", "spam"] });
     expect(calls[0].fallback).toBeUndefined();
     expect(result.settledByFlash).toBe(3);
     expect(result.safeActionTaken).toBe(false);
-    expect(result.destination).toEqual({ teamId: "billing", teamName: "Billing" });
-    expect(result.questions.urgency.final).toEqual({ kind: "urgency", label: "High", level: 2 });
-    expect(result.questions.spam.final).toEqual({ kind: "spam", spam: false, review: false });
-    expect(result.deliver).toBe(true);
+    expect(result.outcome).toMatchObject({ teamId: "billing", queue: "Billing", deliver: true, review: false });
+    expect(q(result, "urgency").final).toEqual({ kind: "urgency", label: "High", level: 2 });
+    expect(q(result, "spam").final).toEqual({ kind: "flag", value: false, label: "Not spam", raised: false });
   });
 
   it("sends only the unsure questions to DecisionNode, with fallback false", async () => {
     const { result, calls } = await ok(
-      run({
-        flash: { ...sure, urgency: scoreAnswer(1.6, 0.41) },
-        moe: { urgency: scoreAnswer(2.9, 0.9) },
-      }),
+      run({ flash: { ...sure, urgency: scoreAnswer(1.6, 0.41) }, moe: { urgency: scoreAnswer(2.9, 0.9) } }),
     );
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toEqual(
-      expect.objectContaining({ model: "decisionnode-moe", questions: ["urgency"], fallback: false }),
-    );
+    expect(calls[1]).toEqual(expect.objectContaining({ model: "decisionnode-moe", questions: ["urgency"], fallback: false }));
     expect(calls[1].state).toEqual(calls[0].state);
-    expect(result.questions.urgency.settledBy).toBe("moe");
-    expect(result.questions.urgency.attempts.map((a) => [a.model, a.sure])).toEqual([
+    expect(q(result, "urgency").settledBy).toBe("moe");
+    expect(q(result, "urgency").attempts.map((a) => [a.model, a.sure])).toEqual([
       ["flash", false],
       ["moe", true],
     ]);
-    expect(result.questions.urgency.final).toEqual({ kind: "urgency", label: "Critical", level: 3 });
+    expect(q(result, "urgency").final).toEqual({ kind: "urgency", label: "Critical", level: 3 });
     expect(result.settledByFlash).toBe(2);
   });
 
-  it("escalates a truth answer near 0.5", async () => {
-    const { calls, result } = await ok(
-      run({ flash: { ...sure, spam: truthAnswer(0.6) }, moe: { spam: truthAnswer(0.97) } }),
-    );
+  it("escalates a truth answer near 0.5 and holds what is sure to be spam", async () => {
+    const { calls, result } = await ok(run({ flash: { ...sure, spam: truthAnswer(0.6) }, moe: { spam: truthAnswer(0.97) } }));
     expect(calls[1].questions).toEqual(["spam"]);
-    expect(result.questions.spam.final).toEqual({ kind: "spam", spam: true, review: false });
-    expect(result.deliver).toBe(false);
+    expect(q(result, "spam").final).toMatchObject({ value: true, raised: true });
+    expect(result.outcome.deliver).toBe(false);
   });
 
   it("takes the safe action when no model is sure", async () => {
-    const unsure: WireAnswers = {
-      destination: choiceAnswer("billing", 0.4),
-      urgency: scoreAnswer(1, 0.3),
-      spam: truthAnswer(0.55),
-    };
+    const unsure: WireAnswers = { team: choiceAnswer("billing", 0.4), urgency: scoreAnswer(1, 0.3), spam: truthAnswer(0.55) };
     const { result, calls } = await ok(run({ flash: unsure, moe: unsure }));
     expect(calls.map((c) => c.questions.length)).toEqual([3, 3]);
     expect(result.safeActionTaken).toBe(true);
     expect(result.settledByFlash).toBe(0);
-    expect(result.questions.destination.settledBy).toBe("safe");
-    expect(result.destination).toEqual({ teamId: "customer_care", teamName: "Customer care" });
-    expect(result.questions.destination.safeAction).toEqual({
-      question: "destination",
-      teamId: "customer_care",
-      teamName: "Customer care",
-    });
-    expect(result.questions.urgency.final).toEqual({ kind: "urgency", label: "Unsure", level: null });
-    expect(result.questions.spam.final).toEqual({ kind: "spam", spam: false, review: true });
-    expect(result.deliver).toBe(true);
+    expect(q(result, "team").settledBy).toBe("safe");
+    expect(result.outcome).toMatchObject({ teamId: "customer_care", queue: "Customer care", deliver: true, review: true });
+    expect(q(result, "urgency").final).toEqual({ kind: "urgency", label: "Unsure", level: null });
+    // never silently dropped: an unsure spam check goes through, marked for review
+    expect(q(result, "spam").final).toEqual({ kind: "flag", value: null, label: "Unsure", raised: false });
   });
 
   it("treats a destination that is not one of the form's teams as unsure", async () => {
     const { result, calls } = await ok(
-      run({
-        flash: { ...sure, destination: choiceAnswer("marketing", 0.99) },
-        moe: { destination: choiceAnswer("legal", 0.97) },
-      }),
+      run({ flash: { ...sure, team: choiceAnswer("marketing", 0.99) }, moe: { team: choiceAnswer("legal", 0.97) } }),
     );
-    expect(calls[1].questions).toEqual(["destination"]);
-    expect(result.questions.destination.attempts[0]).toMatchObject({
+    expect(calls[1].questions).toEqual(["team"]);
+    expect(q(result, "team").attempts[0]).toMatchObject({
       answer: { kind: "destination_unregistered", value: "marketing" },
       confidence: 0,
       sure: false,
     });
-    expect(result.questions.destination.settledBy).toBe("safe");
-    expect(result.destination.teamId).toBe("customer_care");
+    expect(q(result, "team").settledBy).toBe("safe");
+    expect(result.outcome.teamId).toBe("customer_care");
   });
 
   it("treats a missing answer as unsure", async () => {
     const { calls, result } = await ok(
-      run({ flash: { destination: sure.destination, urgency: sure.urgency }, moe: { spam: truthAnswer(0.01) } }),
+      run({ flash: { team: sure.team, urgency: sure.urgency }, moe: { spam: truthAnswer(0.01) } }),
     );
     expect(calls[1].questions).toEqual(["spam"]);
-    expect(result.questions.spam.attempts[0].answer).toEqual({ kind: "none" });
-    expect(result.questions.spam.settledBy).toBe("moe");
+    expect(q(result, "spam").attempts[0].answer).toEqual({ kind: "none" });
+    expect(q(result, "spam").settledBy).toBe("moe");
   });
 
   it("passes every question to DecisionNode when Flash times out", async () => {
@@ -152,21 +156,20 @@ describe("the cascade", () => {
     expect(result.calls[0].error).toEqual({ message: "DecisionNode Flash did not answer in time.", retryable: true });
     expect(result.calls[0].usage).toBeNull();
     expect(result.settledByFlash).toBe(0);
-    expect(result.questions.destination.settledBy).toBe("moe");
+    expect(q(result, "team").settledBy).toBe("moe");
   });
 
   it("passes every question to DecisionNode when Flash fails", async () => {
     const { result } = await ok(run({ flash: new ConnectionError("socket hang up"), moe: sure }));
     expect(result.calls[0].error?.message).toBe("DecisionNode Flash could not be reached.");
-    expect(result.questions.spam.settledBy).toBe("moe");
+    expect(q(result, "spam").settledBy).toBe("moe");
   });
 
   it("returns a retryable error when DecisionNode fails", async () => {
-    const { outcome } = run({
-      flash: { ...sure, destination: choiceAnswer("billing", 0.2) },
+    const result = await run({
+      flash: { ...sure, team: choiceAnswer("billing", 0.2) },
       moe: new OverloadedError("busy", { status: 529, retryAfter: 2 }),
-    });
-    const result = await outcome;
+    }).outcome;
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatchObject({ message: "DecisionNode is busy right now.", retryable: true });
@@ -174,8 +177,7 @@ describe("the cascade", () => {
   });
 
   it("returns an error when Flash and DecisionNode both fail", async () => {
-    const { outcome } = run({ flash: new TimeoutError("t"), moe: new TimeoutError("t") });
-    const result = await outcome;
+    const result = await run({ flash: new TimeoutError("t"), moe: new TimeoutError("t") }).outcome;
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.retryable).toBe(true);
   });
@@ -187,19 +189,117 @@ describe("the cascade", () => {
       version: "decisionnode-flash-test",
       serverMs: 19,
       requestId: "req_flash_1",
-      usage: { inputTokens: 420, outputTokens: 3, costUsd: 0.000002604, freeTier: false },
+      knowledge: null,
+      usage: { inputTokens: 420, outputTokens: 0, costUsd: 0.000002604, modelUsd: 0.000002604, boostersUsd: 0, freeTier: false },
     });
   });
 
   it("records tokens without a cost when the API sends none", async () => {
-    const fake = fakeDeciders({ flash: sure }, { input_tokens: 300, output_tokens: 3 });
-    const outcome = await route({ form, submission, config: { models: ["flash", "moe"], threshold: 0.7 }, clients: fake.clients });
-    expect(outcome.ok && outcome.result.calls[0].usage).toEqual({
-      inputTokens: 300,
-      outputTokens: 3,
-      costUsd: null,
-      freeTier: null,
+    const fake = fakeDeciders({ flash: sure }, { input_tokens: 300, output_tokens: 0 });
+    const outcome = await route({
+      form,
+      submission: textOnly,
+      config: { models: ["flash", "moe"], threshold: 0.7, knowledgeBase: null },
+      clients: fake.clients,
     });
+    expect(outcome.ok && outcome.result.calls[0].usage).toMatchObject({ inputTokens: 300, costUsd: null, freeTier: null });
+  });
+});
+
+describe("pictures", () => {
+  it("sends the pictures by id and names their field in the state", async () => {
+    const { calls } = await ok(run({ flash: sure }, { submission: withPicture }));
+    expect(calls[0].images).toEqual(["screenshot_1"]);
+    expect(calls[0].state).toMatchObject({ pictures: [{ id: "screenshot_1", field: "Screenshots" }] });
+  });
+
+  it("asks whether the picture fits only when there is one", async () => {
+    expect(questionsFor(form, false).map((x) => x.id)).toEqual(["team", "urgency", "spam"]);
+    expect(questionsFor(form, true).map((x) => x.id)).toEqual(["team", "urgency", "spam", "matches"]);
+    const { calls } = await ok(run({ flash: sure }, { submission: withPicture }));
+    expect(calls[0].questions).toContain("matches");
+  });
+
+  it("marks a picture that does not fit for review, without holding it", async () => {
+    const { result } = await ok(run({ flash: { ...sure, matches: truthAnswer(0.05) } }, { submission: withPicture }));
+    expect(q(result, "matches").final).toMatchObject({ value: false, raised: true });
+    expect(result.outcome).toMatchObject({ deliver: true, review: true });
+  });
+
+  it("asks an identity document's own questions, and asks for a clearer photo when it cannot be read", async () => {
+    const fake = fakeDeciders({
+      flash: {
+        document_type: choiceAnswer("passport", 0.9),
+        readable: truthAnswer(0.04),
+        name_matches: truthAnswer(0.97),
+        spam: truthAnswer(0.01),
+      },
+    });
+    const outcome = await route({
+      form: FORMS.identity,
+      submission: { values: { ...FORMS.identity.samples[0].values }, pictures: [{ ...picture, id: "document", field: "document" }] },
+      config: { models: ["flash"], threshold: 0.7, knowledgeBase: null },
+      clients: fake.clients,
+    });
+    expect(fake.calls[0].questions).toEqual(["document_type", "readable", "name_matches", "spam"]);
+    if (!outcome.ok) throw new Error(outcome.error.message);
+    expect(outcome.result.outcome).toMatchObject({ queue: "Document check", teamName: "Passport", nextStep: "Ask for a clearer photo" });
+  });
+});
+
+describe("knowledge", () => {
+  const kb = "col_test";
+
+  it("reads the form's rules on every call, Flash and the re-check alike", async () => {
+    const { calls } = await ok(
+      run({ flash: { ...sure, urgency: scoreAnswer(1.5, 0.3) }, moe: { urgency: scoreAnswer(3, 0.9) } }, { knowledgeBase: kb }),
+    );
+    const booster = [{ name: "knowledge", require: true, options: { collection: kb, scope: "support", include_text: true } }];
+    expect(calls.map((c) => c.boosters)).toEqual([booster, booster]);
+  });
+
+  it("shows the passages each call cited, and their cost", async () => {
+    const { result } = await ok(run({ flash: sure }, { knowledgeBase: kb }));
+    expect(result.knowledge).toBe(true);
+    expect(result.calls[0].knowledge?.passages).toEqual([
+      { n: 1, pinned: true, title: "Always", heading: "Locked accounts", reference: "support/always", text: PASSAGES[0].text },
+      { n: 2, pinned: false, title: "Billing", heading: "Double charges", reference: "support/billing", text: PASSAGES[1].text },
+    ]);
+    expect(result.calls[0].usage).toMatchObject({ boostersUsd: 0.001, knowledgeTokens: 30 });
+  });
+
+  it("routes on the criteria alone without a knowledge base, and says so", async () => {
+    const { result, calls } = await ok(run({ flash: sure }));
+    expect(calls[0].boosters).toBeUndefined();
+    expect(result.knowledge).toBe(false);
+  });
+
+  it("fails as retryable, naming the reason, when the rules cannot be read, and never routes without them", async () => {
+    const unavailable = new OverloadedError("booster unavailable", {
+      status: 529,
+      errorType: "booster_unavailable",
+      reason: "documents still indexing",
+    });
+    const result = await run({ flash: unavailable, moe: sure }, { knowledgeBase: kb }).outcome;
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.retryable).toBe(true);
+    expect(result.error.message).toMatch(/routing rules could not be read \(documents still indexing\)/);
+    // the next model is not asked: it would have to route without the rules
+    expect(result.error.calls.map((c) => c.model)).toEqual(["flash"]);
+  });
+
+  it("explains an empty or missing knowledge base", async () => {
+    const empty = new DecisionNodeError("empty", { status: 409, errorType: "knowledge_collection_empty" });
+    const missing = new DecisionNodeError("not found", { status: 404, errorType: "collection_not_found" });
+    for (const [err, text] of [
+      [empty, /no ready routing rules/],
+      [missing, /names no knowledge base/],
+    ] as const) {
+      const result = await run({ flash: err }, { knowledgeBase: kb }).outcome;
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatchObject({ retryable: false, message: expect.stringMatching(text) });
+    }
   });
 });
 
@@ -210,7 +310,7 @@ describe("ROUTER_MODELS", () => {
   });
 
   it("moe sends every question to DecisionNode, with fallback false", async () => {
-    const { calls, result } = await ok(run({ flash: new Error("must not be called"), moe: sure }, ["moe"]));
+    const { calls, result } = await ok(run({ flash: new Error("must not be called"), moe: sure }, { models: ["moe"] }));
     expect(calls).toEqual([expect.objectContaining({ model: "decisionnode-moe", fallback: false })]);
     expect(calls[0].questions).toHaveLength(3);
     expect(result.settledByFlash).toBe(0);
@@ -218,24 +318,24 @@ describe("ROUTER_MODELS", () => {
 
   it("flash alone takes the safe action for unsure questions", async () => {
     const { calls, result } = await ok(
-      run({ flash: { ...sure, destination: choiceAnswer("billing", 0.5) }, moe: new Error("must not be called") }, ["flash"]),
+      run({ flash: { ...sure, team: choiceAnswer("billing", 0.5) }, moe: new Error("must not be called") }, { models: ["flash"] }),
     );
     expect(calls).toHaveLength(1);
-    expect(result.questions.destination.settledBy).toBe("safe");
+    expect(q(result, "team").settledBy).toBe("safe");
     expect(result.settledByFlash).toBe(2);
   });
 
   it("flash alone failing is an error", async () => {
-    const result = await run({ flash: new TimeoutError("t") }, ["flash"]).outcome;
+    const result = await run({ flash: new TimeoutError("t") }, { models: ["flash"] }).outcome;
     expect(result.ok).toBe(false);
   });
 });
 
 describe("the threshold", () => {
   it("decides what is final", async () => {
-    const strict = await ok(run({ flash: sure, moe: sure }, ["flash", "moe"], 0.9));
+    const strict = await ok(run({ flash: sure, moe: sure }, { threshold: 0.9 }));
     expect(strict.calls[1].questions).toEqual(["urgency"]);
-    const loose = await ok(run({ flash: sure, moe: sure }, ["flash", "moe"], 0.5));
+    const loose = await ok(run({ flash: sure, moe: sure }, { threshold: 0.5 }));
     expect(loose.calls).toHaveLength(1);
   });
 });
@@ -246,11 +346,16 @@ describe("configuration", () => {
     expect(readConfig({ DECISIONNODE_API_KEY: "  " })).toEqual({ ok: false, reason: "missing_key" });
   });
 
-  it("defaults to flash,moe and 0.7", () => {
+  it("defaults to flash,moe, 0.7 and no knowledge base", () => {
     expect(readConfig({ DECISIONNODE_API_KEY: "dn_test" })).toEqual({
       ok: true,
-      config: { apiKey: "dn_test", models: ["flash", "moe"], threshold: 0.7 },
+      config: { apiKey: "dn_test", models: ["flash", "moe"], threshold: 0.7, knowledgeBase: null },
     });
+  });
+
+  it("reads ROUTER_KNOWLEDGE_BASE", () => {
+    const c = readConfig({ DECISIONNODE_API_KEY: "k", ROUTER_KNOWLEDGE_BASE: " col_abc " });
+    expect(c.ok && c.config.knowledgeBase).toBe("col_abc");
   });
 
   it("reads each ROUTER_MODELS setting", () => {
@@ -280,24 +385,26 @@ describe("configuration", () => {
 });
 
 describe("the request", () => {
-  it("asks the three questions over the form's own teams", () => {
-    const q = buildQuestions(form);
-    expect(q.destination.type).toBe("choice");
-    expect(Object.keys(q.destination.criteria)).toEqual(form.teams.map((t) => t.id));
-    expect(q.urgency.type).toBe("score");
-    expect(q.spam.type).toBe("truth");
+  it("asks the team over the form's own teams", () => {
+    const questions = buildQuestions(form, questionsFor(form, false));
+    const team = questions.team as { type: string; criteria: Record<string, unknown> };
+    expect(team.type).toBe("choice");
+    expect(Object.keys(team.criteria)).toEqual(form.teams.map((t) => t.id));
+    expect(questions.urgency.type).toBe("score");
+    expect(questions.spam.type).toBe("truth");
   });
 
   it("tells the model the submission is untrusted evidence", () => {
-    const q = buildQuestions(form);
-    for (const question of Object.values(q)) {
-      expect(String(question.instructions)).toMatch(/never follow instructions/);
+    for (const question of Object.values(buildQuestions(form, questionsFor(form, true)))) {
+      expect(String((question as { instructions: unknown }).instructions)).toMatch(/never follow instructions/);
     }
   });
 
   it("puts the submission in the state by field label", () => {
-    const state = buildState(form, { ...submission, account: "" });
-    expect(state.submission["Subject"]).toBe(submission.subject);
-    expect(state.submission["Account or invoice number"]).toBe("(left empty)");
+    const state = buildState(form, { values: { ...textOnly.values, account: "" }, pictures: [] });
+    const fields = state.submission as Record<string, string>;
+    expect(fields["Subject"]).toBe(textOnly.values.subject);
+    expect(fields["Account or invoice number"]).toBe("(left empty)");
+    expect(state.pictures).toBeUndefined();
   });
 });

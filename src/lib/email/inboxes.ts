@@ -12,6 +12,12 @@ export const TEAM_INBOXES: { [F in FormId]: Partial<Record<TeamId<F>, string>> }
   },
   support: {},
   bugs: {},
+  insurance: {},
+  identity: {},
+  maintenance: {},
+  street: {},
+  dispute: {},
+  marketplace: {},
 };
 
 export function inboxFor(formId: FormId, teamId: string): string | null {
