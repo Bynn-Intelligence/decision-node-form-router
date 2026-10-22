@@ -46,6 +46,12 @@ describe("the email", () => {
     expect(message.text).toContain("Not spam");
   });
 
+  it("keeps the subject on one line", async () => {
+    const values = { ...submission, subject: "Refund\r\nBcc: someone@example.com" };
+    const message = await buildEmail(form, values, await routed(sure, values), null);
+    expect(message.subject).toBe("[High] Customer contact: Refund");
+  });
+
   it("escapes what the submitter typed", async () => {
     const values = { ...submission, message: '<img src=x onerror="alert(1)">' };
     const message = await buildEmail(form, values, await routed(sure, values), null);

@@ -34,7 +34,8 @@ export function spamLabel(result: RoutingResult): string {
 
 function headline(form: FormDef, submission: Submission): string {
   const text = submission.subject || submission.message || submission.description || "New submission";
-  const line = text.split("\n")[0].trim();
+  // one line, with no control characters, since it becomes the subject
+  const line = text.split(/\r?\n/)[0].replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
   return line.length > 72 ? `${line.slice(0, 71).trimEnd()}...` : line;
 }
 
