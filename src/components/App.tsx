@@ -17,7 +17,12 @@ export function App({ initialForm, settings }: { initialForm: FormId | null; set
   const [active, setActive] = useState<FormId | null>(initialForm);
 
   useEffect(() => {
-    const onPop = () => setActive(formFromUrl());
+    // the page decides where a form starts, not the browser's memory of the last scroll
+    window.history.scrollRestoration = "manual";
+    const onPop = () => {
+      setActive(formFromUrl());
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -25,7 +30,8 @@ export function App({ initialForm, settings }: { initialForm: FormId | null; set
   function open(id: FormId | null) {
     window.history.pushState(null, "", id ? `?form=${id}` : window.location.pathname);
     setActive(id);
-    window.scrollTo({ top: 0 });
+    // another form, or back to the picker, always starts at the top of the page
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
 
   if (active) {

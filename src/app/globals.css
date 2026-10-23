@@ -39,6 +39,26 @@ body {
   color: var(--color-ink);
 }
 
+/* everything clickable shows the hand cursor; buttons default to the arrow */
+@layer base {
+  a[href],
+  button:not(:disabled),
+  [role="button"],
+  [role="tab"],
+  summary,
+  select,
+  label:has(input[type="checkbox"]),
+  label:has(input[type="file"]),
+  input[type="checkbox"],
+  input[type="file"] {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--color-lime);
   outline-offset: 2px;

@@ -129,6 +129,7 @@ export function QuestionCard({ question, calls, threshold }: { question: Questio
       ) : (
         <p className="mt-3 text-sm text-muted">No model answered this question.</p>
       )}
+      {question.unanswered && <p className="mt-3 text-sm text-amber">{question.unanswered}.</p>}
       {question.note && <p className="mt-3 text-sm text-amber">{question.note}</p>}
       {passages && <Passages passages={passages} />}
     </article>

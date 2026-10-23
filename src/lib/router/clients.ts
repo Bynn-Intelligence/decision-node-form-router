@@ -1,20 +1,23 @@
 import "server-only";
-import { DecisionNode } from "@decisionnode/sdk";
-import { MAX_RETRIES, MODEL_IDS, MODEL_TIMEOUTS, type ModelKey } from "./config";
+import { DecisionNode, type ClientOptions } from "@decisionnode/sdk";
+import { MODEL_IDS, MODEL_RETRIES, MODEL_TIMEOUTS, type ModelKey } from "./config";
 import type { Deciders } from "./cascade";
 
 // pictures always go inline, in the request itself: nothing is uploaded or stored
 const INLINE_PICTURES = 25 * 1024 * 1024;
 
-/** One SDK client per model, each with its own timeout per attempt and one retry. */
+/** A model's client: its own timeout per attempt; Flash retries once, the re-check never. */
+export function clientOptions(apiKey: string, model: ModelKey): ClientOptions {
+  return {
+    apiKey,
+    model: MODEL_IDS[model],
+    timeout: MODEL_TIMEOUTS[model],
+    maxRetries: MODEL_RETRIES[model],
+    inlineThreshold: INLINE_PICTURES,
+  };
+}
+
+/** One SDK client per model. */
 export function createDeciders(apiKey: string): Deciders {
-  const client = (model: ModelKey) =>
-    new DecisionNode({
-      apiKey,
-      model: MODEL_IDS[model],
-      timeout: MODEL_TIMEOUTS[model],
-      maxRetries: MAX_RETRIES,
-      inlineThreshold: INLINE_PICTURES,
-    });
-  return { flash: client("flash"), moe: client("moe") };
+  return { flash: new DecisionNode(clientOptions(apiKey, "flash")), moe: new DecisionNode(clientOptions(apiKey, "moe")) };
 }

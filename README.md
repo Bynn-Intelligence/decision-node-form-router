@@ -54,7 +54,7 @@ The script uses your `DECISIONNODE_API_KEY` (a Full access key). It creates one 
 
 ### In the result
 
-Each answer shows the passages of the playbook it rested on: the document, the heading and the passage, marked when it is a rule that always applies. If the rules cannot be read (for example, documents still indexing), the request is retried once and then shown as an error you can retry, with the reason the API gave. The router never routes without the rules when a knowledge base is set. Without `ROUTER_KNOWLEDGE_BASE`, it routes on the team criteria alone and says so in the result.
+Each answer shows the passages of the playbook it rested on: the document, the heading and the passage, marked when it is a rule that always applies. If the rules cannot be read (for example, documents still indexing), Flash's request is retried once, and then the submission is shown as an error you can retry, with the reason the API gave. The router never routes without the rules when a knowledge base is set. Without `ROUTER_KNOWLEDGE_BASE`, it routes on the team criteria alone and says so in the result.
 
 ### What it costs
 
@@ -128,7 +128,7 @@ Without a key the app routes nothing and shows how to add one.
 2. DecisionNode Flash (`decisionnode-flash`) answers every question, reading the form's rules when a knowledge base is set.
 3. Each answer's confidence is compared with the threshold. An answer at or above it is final.
 4. The questions below the threshold, and only those, are sent to DecisionNode (`decisionnode-moe`) with the same state, pictures and rules, and `fallback: false`, so the re-check always comes from the full model. Its answers are final when they reach the threshold.
-5. A question still below the threshold takes its safe action.
+5. A question still below the threshold takes its safe action. So does a question the last model could not answer because it was busy, too slow or unreachable: the answers that met the threshold stand, and the submission is routed.
 
 Confidence is on the same 0 to 1 scale for every question type:
 
@@ -147,7 +147,11 @@ The safe actions:
 
 A submission settled as spam is held: it is shown, and no email is sent. An identity document that cannot be read gets the next step "Ask for a clearer photo".
 
-If Flash fails or does not answer within 5 seconds, its questions go to DecisionNode, and the result says why. If DecisionNode fails or does not answer within 10 seconds, the submission is not routed and no email is sent; when trying again can help, the page offers it. Each call is retried once after a temporary failure, such as a timeout or a busy model. A failure of the rules themselves fails the submission at once, since the next model would have to route without them.
+If Flash fails or does not answer within 5 seconds, its questions go to DecisionNode, and the result says why. Flash's request is retried once after a temporary failure, such as a timeout or a busy model.
+
+The re-check is never retried, so it never holds the page: 10 seconds is its limit. If DecisionNode is busy, does not answer in time, cannot be reached or has a server error, the submission is still routed. The answers that met the threshold stand, the questions it was to re-check take their safe action, and the result and the email say so on those questions and in the summary, for example "DecisionNode was busy, safe action taken", with the reason the API gave. The same holds for Flash when it is the only model in `ROUTER_MODELS`.
+
+A failure that waiting cannot fix stops the submission: a key that is not accepted, no credit, a refused request, a request the API cannot read, or routing rules that cannot be read. The submission is then not routed and no email is sent; when trying again can help, the page offers it.
 
 Each call's cost is the amount the API reports in the answer's `usage.cost`, with the model's and the knowledge call's parts. When an answer carries no cost, the result shows its tokens instead.
 

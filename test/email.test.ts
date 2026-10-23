@@ -1,4 +1,4 @@
-import { OverloadedError } from "@decisionnode/sdk";
+import { InsufficientCreditError, OverloadedError } from "@decisionnode/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { FORMS } from "@/lib/forms/definitions";
 import type { Submission } from "@/lib/forms/types";
@@ -206,12 +206,24 @@ describe("a submit", () => {
 
   it("sends no email when routing failed", async () => {
     const d = deps(
-      { flash: { ...sure, team: choiceAnswer("billing", 0.3) }, moe: new OverloadedError("busy") },
+      { flash: { ...sure, team: choiceAnswer("billing", 0.3) }, moe: new InsufficientCreditError("out of credit", { status: 402 }) },
       { RESEND_API_KEY: "re_x", RESEND_FROM: "a@b.example" },
     );
     const state = await submit(formData(values, { send_email: "on" }), d.deps);
-    expect(state).toMatchObject({ status: "error", retryable: true });
+    expect(state).toMatchObject({ status: "error", retryable: false });
     expect(d.send).not.toHaveBeenCalled();
+  });
+
+  it("routes and sends when DecisionNode was busy, the email saying so", async () => {
+    const d = deps(
+      { flash: { ...sure, team: choiceAnswer("billing", 0.3) }, moe: new OverloadedError("busy", { status: 529 }) },
+      { RESEND_API_KEY: "re_x", RESEND_FROM: "a@b.example" },
+    );
+    const state = await submit(formData(values, { send_email: "on" }), d.deps);
+    if (state.status !== "result") throw new Error(state.status);
+    expect(state.result.unavailable).toMatch(/^DecisionNode was busy/);
+    expect(state.email.status).toBe("sent");
+    expect(state.email.message.text).toMatch(/DecisionNode was busy/);
   });
 
   it("routes and sends when opted in", async () => {

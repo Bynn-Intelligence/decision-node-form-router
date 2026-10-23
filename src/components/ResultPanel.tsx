@@ -210,6 +210,12 @@ function Result({ state }: { state: Extract<SubmitState, { status: "result" }> }
         </p>
       </div>
 
+      {result.unavailable && (
+        <Notice icon={Warning} title={result.unavailable}>
+          The answers that met the threshold stand. The {safe.length === 1 ? "question" : `${safe.length} questions`} it was to
+          re-check took {safe.length === 1 ? "its" : "their"} safe action, and the submission was routed.
+        </Notice>
+      )}
       {!outcome.deliver && (
         <Notice icon={Prohibit} title="Held">
           A check was sure this should not be delivered, so it is shown here and not sent on.

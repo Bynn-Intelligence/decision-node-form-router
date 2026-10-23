@@ -81,9 +81,9 @@ export function RoutedSubmission({ form, submission, result }: { form: FormDef; 
                     ))}
                   </tbody>
                 </table>
-                {outcome.notes.length > 0 && (
+                {(outcome.notes.length > 0 || result.unavailable) && (
                   <p style={{ margin: "16px 0 0", fontSize: "14px", lineHeight: "20px", color: "#7a4b00" }}>
-                    {outcome.notes.join(" ")}
+                    {[result.unavailable ? `${result.unavailable}.` : null, ...outcome.notes].filter(Boolean).join(" ")}
                   </p>
                 )}
                 <hr style={{ border: "none", borderTop: "1px solid #e3e5df", margin: "20px 0" }} />

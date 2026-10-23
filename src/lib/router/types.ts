@@ -36,6 +36,8 @@ export interface QuestionResult {
   safeAction: string | null;
   /** For a flag that is up: what the result says about it. */
   note: string | null;
+  /** When the last model could not answer this question: why, such as "DecisionNode was busy, safe action taken". */
+  unanswered: string | null;
 }
 
 /** A passage of the routing rules a call read, as the API cited it. */
@@ -118,6 +120,8 @@ export interface RoutingResult {
   settledByFlash: number;
   /** Whether any question took the safe action. */
   safeActionTaken: boolean;
+  /** When the last model could not answer: why, for the summary; `null` when every model answered. */
+  unavailable: string | null;
   outcome: Outcome;
 }
 

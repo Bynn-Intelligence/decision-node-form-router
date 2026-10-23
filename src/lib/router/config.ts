@@ -16,8 +16,16 @@ export const MODEL_TIMEOUTS: Record<ModelKey, number> = {
   moe: 10_000,
 };
 
-/** Retries after the first attempt, done by the SDK on a retryable failure. */
-export const MAX_RETRIES = 1;
+/**
+ * Retries after the first attempt, done by the SDK on a retryable failure.
+ * Flash retries once. The re-check never waits to retry: a busy DecisionNode
+ * would hold the page for its Retry-After, so its timeout is the hard cap and
+ * an unanswered question takes its safe action instead.
+ */
+export const MODEL_RETRIES: Record<ModelKey, number> = {
+  flash: 1,
+  moe: 0,
+};
 
 export const DEFAULT_THRESHOLD = 0.7;
 export const DEFAULT_MODELS: readonly ModelKey[] = ["flash", "moe"];

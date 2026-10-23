@@ -27,3 +27,4 @@ Run lint, typecheck, tests and build before every commit; CI runs the same on ev
 - Submission fields and pictures are untrusted. They go into the request's state and images, never into the questions' instructions.
 - The API key, the Resend key and the team inboxes stay on the server: read them only in server code, and never return them from the server action.
 - Icons come from `@phosphor-icons/react` with the light weight. Text and controls meet WCAG AA contrast.
+- Everything clickable shows the hand cursor (`src/app/globals.css` sets it for links, buttons, tabs, summaries and file pickers), and opening another form or going back to the picker lands at the top of the page.

@@ -53,6 +53,8 @@ export async function route({ form, submission, config, clients, now = () => per
   const settled = new Map<string, { model: ModelKey; answer: AnswerView }>();
   const calls: CallRecord[] = [];
   let pending = asked.map((q) => q.id);
+  // set when the last model could not answer: its questions take their safe action
+  let unavailable: string | null = null;
 
   for (const [i, model] of config.models.entries()) {
     if (pending.length === 0) break;
@@ -75,6 +77,11 @@ export async function route({ form, submission, config, clients, now = () => per
       calls.push(failedCall(model, pending, submission.pictures.length, now() - start, err, error));
       // Flash failing hands its questions to the next model, unless every model would fail alike
       if (!last && model === "flash" && error.passOn) continue;
+      // the last model busy, too slow or unreachable: keep what is settled, the rest takes its safe action
+      if (last && error.unavailable) {
+        unavailable = `${error.unavailable}, safe action taken`;
+        break;
+      }
       return { ok: false, error: { message: error.message, retryable: error.retryable, calls } };
     }
 
@@ -99,10 +106,10 @@ export async function route({ form, submission, config, clients, now = () => per
     const base = { id: q.id, kind: q.kind, title: q.title, attempts: attempts.get(q.id)! };
     if (done) {
       const final = finalOf(done.answer, q);
-      return { ...base, final, settledBy: done.model, safeAction: null, note: noteOf(final, q) };
+      return { ...base, final, settledBy: done.model, safeAction: null, note: noteOf(final, q), unanswered: null };
     }
     const { final, safeAction } = safeFor(form, q);
-    return { ...base, final, settledBy: "safe" as const, safeAction, note: null };
+    return { ...base, final, settledBy: "safe" as const, safeAction, note: null, unanswered: unavailable };
   });
 
   return {
@@ -116,6 +123,7 @@ export async function route({ form, submission, config, clients, now = () => per
       calls,
       settledByFlash: results.filter((r) => r.settledBy === "flash").length,
       safeActionTaken: results.some((r) => r.settledBy === "safe"),
+      unavailable,
       outcome: outcomeOf(form, results),
     },
   };

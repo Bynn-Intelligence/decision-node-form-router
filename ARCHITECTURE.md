@@ -33,7 +33,8 @@ A single-page Next.js app. The page reads the settings on every request; a serve
 
 ## Design choices
 
-- **One client per model.** Flash and DecisionNode have their own timeouts (5 s and 10 s per attempt), set on each client, with one retry by the SDK.
+- **One client per model.** Flash and DecisionNode have their own timeouts (5 s and 10 s per attempt), set on each client. Flash retries once; the re-check never does, since waiting out a busy model's Retry-After would hold the page.
+- **A busy last model does not fail the submission.** When the last model is busy, too slow, unreachable or has a server error, `route` keeps every answer that met the threshold, gives the rest their safe action and records why (`unavailable` on the result, `unanswered` on each question). Only failures that waiting cannot fix (the key, credit, a refusal, a bad request, the routing rules) fail the submission.
 - **Only unsure questions move on.** The second call carries only the questions the first model was unsure of, so its cost follows how hard the submission is.
 - **Never route without the rules.** With a knowledge base set, every call requires the booster. A failure of the rules fails the submission rather than passing it to the next model, which would read the same rules.
 - **Pictures inline.** The SDK clients send every picture in the request, so nothing is uploaded or kept.

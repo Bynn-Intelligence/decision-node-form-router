@@ -20,6 +20,18 @@ export interface DescribedError {
   retryable: boolean;
   /** Whether the next model can take the questions over. A fault of the routing rules or the key fails every model alike. */
   passOn: boolean;
+  /**
+   * Set when the model could not answer for a while (busy, too slow, unreachable,
+   * a server error): what happened, in words, with the API's reason when it gave
+   * one. The last model failing like this leaves its questions to their safe action
+   * rather than failing the submission.
+   */
+  unavailable?: string;
+}
+
+function withReason(text: string, err: DecisionNodeError): string {
+  const reason = err.reason || err.message;
+  return reason && !/^HTTP \d+/.test(reason) ? `${text} (${reason.replace(/\.$/, "")})` : text;
 }
 
 function reasonOf(err: DecisionNodeError): string | null {
@@ -59,8 +71,12 @@ export function describeError(model: ModelKey, err: unknown): DescribedError {
       return { message: "Knowledge is turned off for this workspace.", retryable: false, passOn: false };
     }
   }
-  if (err instanceof TimeoutError) return { message: `${name} did not answer in time.`, retryable: true, passOn: true };
-  if (err instanceof ConnectionError) return { message: `${name} could not be reached.`, retryable: true, passOn: true };
+  if (err instanceof TimeoutError) {
+    return { message: `${name} did not answer in time.`, retryable: true, passOn: true, unavailable: `${name} did not answer in time` };
+  }
+  if (err instanceof ConnectionError) {
+    return { message: `${name} could not be reached.`, retryable: true, passOn: true, unavailable: `${name} could not be reached` };
+  }
   if (err instanceof AuthenticationError) {
     return { message: "The API key was not accepted. Check DECISIONNODE_API_KEY.", retryable: false, passOn: false };
   }
@@ -72,14 +88,20 @@ export function describeError(model: ModelKey, err: unknown): DescribedError {
   }
   if (err instanceof PermissionDeniedError) return { message: `This key may not call ${name}.`, retryable: false, passOn: true };
   if (err instanceof RateLimitError) return { message: `${name} is rate limited right now.`, retryable: true, passOn: true };
-  if (err instanceof OverloadedError) return { message: `${name} is busy right now.`, retryable: true, passOn: true };
-  if (err instanceof ServerError) return { message: `${name} had a server error.`, retryable: true, passOn: true };
+  if (err instanceof OverloadedError) {
+    return { message: `${name} is busy right now.`, retryable: true, passOn: true, unavailable: withReason(`${name} was busy`, err) };
+  }
+  if (err instanceof ServerError) {
+    return { message: `${name} had a server error.`, retryable: true, passOn: true, unavailable: withReason(`${name} had a server error`, err) };
+  }
   if (err instanceof BadRequestError) {
     const detail = err.message ? `: ${err.message.replace(/\.$/, "")}` : "";
     return { message: `${name} could not read the request${detail}.`, retryable: false, passOn: false };
   }
   if (err instanceof DecisionNodeError) {
-    return { message: `${name} failed${err.status ? ` with HTTP ${err.status}` : ""}.`, retryable: true, passOn: true };
+    const message = `${name} failed${err.status ? ` with HTTP ${err.status}` : ""}.`;
+    const server = err.status !== null && err.status >= 500;
+    return { message, retryable: true, passOn: true, ...(server ? { unavailable: withReason(`${name} had a server error`, err) } : {}) };
   }
   return { message: `${name} failed.`, retryable: true, passOn: true };
 }

@@ -1,4 +1,18 @@
-import { ChoiceAnswer, ConnectionError, OverloadedError, ScoreAnswer, TimeoutError, TruthAnswer, DecisionNodeError } from "@decisionnode/sdk";
+import {
+  AuthenticationError,
+  BadRequestError,
+  ChoiceAnswer,
+  ConnectionError,
+  DecisionNodeError,
+  InsufficientCreditError,
+  OverloadedError,
+  RefusalError,
+  ScoreAnswer,
+  ServerError,
+  TimeoutError,
+  TruthAnswer,
+} from "@decisionnode/sdk";
+import { clientOptions } from "@/lib/router/clients";
 import { describe, expect, it } from "vitest";
 import { FORMS } from "@/lib/forms/definitions";
 import type { Picture, Submission } from "@/lib/forms/types";
@@ -165,21 +179,64 @@ describe("the cascade", () => {
     expect(q(result, "spam").settledBy).toBe("moe");
   });
 
-  it("returns a retryable error when DecisionNode fails", async () => {
-    const result = await run({
-      flash: { ...sure, team: choiceAnswer("billing", 0.2) },
-      moe: new OverloadedError("busy", { status: 529, retryAfter: 2 }),
-    }).outcome;
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toMatchObject({ message: "DecisionNode is busy right now.", retryable: true });
-    expect(result.error.calls.map((c) => c.model)).toEqual(["flash", "moe"]);
+  it("routes with safe actions when DecisionNode is busy, keeping what Flash settled", async () => {
+    const { result, calls } = await ok(
+      run({
+        flash: { ...sure, team: choiceAnswer("billing", 0.2) },
+        moe: new OverloadedError("No ready worker.", { status: 529, retryAfter: 2, reason: "no ready worker" }),
+      }),
+    );
+    expect(calls.map((c) => c.model)).toEqual(["decisionnode-flash", "decisionnode-moe"]);
+    expect(result.unavailable).toBe("DecisionNode was busy (no ready worker), safe action taken");
+    expect(q(result, "team")).toMatchObject({
+      settledBy: "safe",
+      unanswered: "DecisionNode was busy (no ready worker), safe action taken",
+    });
+    expect(result.outcome.teamId).toBe("customer_care");
+    // the answers that met the threshold stand
+    expect(q(result, "urgency")).toMatchObject({ settledBy: "flash", unanswered: null });
+    expect(q(result, "spam").settledBy).toBe("flash");
+    expect(result.calls[1].error?.message).toBe("DecisionNode is busy right now.");
   });
 
-  it("returns an error when Flash and DecisionNode both fail", async () => {
-    const result = await run({ flash: new TimeoutError("t"), moe: new TimeoutError("t") }).outcome;
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.retryable).toBe(true);
+  it("routes with safe actions when DecisionNode does not answer in time", async () => {
+    const { result } = await ok(run({ flash: { ...sure, urgency: scoreAnswer(1, 0.3) }, moe: new TimeoutError("timed out") }));
+    expect(result.unavailable).toBe("DecisionNode did not answer in time, safe action taken");
+    expect(q(result, "urgency").final).toEqual({ kind: "urgency", label: "Unsure", level: null });
+    expect(result.outcome).toMatchObject({ teamId: "billing", deliver: true });
+  });
+
+  it("routes with safe actions when DecisionNode has a server error or cannot be reached", async () => {
+    for (const err of [new ServerError("bad gateway", { status: 502 }), new ConnectionError("reset")]) {
+      const { result } = await ok(run({ flash: { ...sure, spam: truthAnswer(0.5) }, moe: err }));
+      expect(q(result, "spam").settledBy).toBe("safe");
+      expect(result.unavailable).toMatch(/safe action taken$/);
+    }
+  });
+
+  it("gives every question its safe action when Flash and DecisionNode both time out", async () => {
+    const { result } = await ok(run({ flash: new TimeoutError("t"), moe: new TimeoutError("t") }));
+    expect(result.questions.every((x) => x.settledBy === "safe")).toBe(true);
+    expect(result.outcome.teamId).toBe("customer_care");
+    expect(result.calls.map((c) => c.error?.message)).toEqual([
+      "DecisionNode Flash did not answer in time.",
+      "DecisionNode did not answer in time.",
+    ]);
+  });
+
+  it("still fails when the last model refuses for a reason waiting cannot fix", async () => {
+    const unsure = { ...sure, team: choiceAnswer("billing", 0.2) };
+    const failures = [
+      new InsufficientCreditError("out of credit", { status: 402 }),
+      new AuthenticationError("bad key", { status: 401 }),
+      new RefusalError("refused", { status: 403 }),
+      new BadRequestError("bad", { status: 400 }),
+      new OverloadedError("booster unavailable", { status: 529, errorType: "booster_unavailable" }),
+    ];
+    for (const err of failures) {
+      const result = await run({ flash: unsure, moe: err }).outcome;
+      expect(result.ok, err.constructor.name).toBe(false);
+    }
   });
 
   it("records the cost and tokens of each call as the API sent them", async () => {
@@ -325,9 +382,22 @@ describe("ROUTER_MODELS", () => {
     expect(result.settledByFlash).toBe(2);
   });
 
-  it("flash alone failing is an error", async () => {
-    const result = await run({ flash: new TimeoutError("t") }, { models: ["flash"] }).outcome;
+  it("flash alone not answering in time takes the safe action for every question", async () => {
+    const { result } = await ok(run({ flash: new TimeoutError("t") }, { models: ["flash"] }));
+    expect(result.unavailable).toBe("DecisionNode Flash did not answer in time, safe action taken");
+    expect(result.safeActionTaken).toBe(true);
+  });
+
+  it("flash alone failing on credit is an error", async () => {
+    const result = await run({ flash: new InsufficientCreditError("out", { status: 402 }) }, { models: ["flash"] }).outcome;
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("the clients", () => {
+  it("retry Flash once and never the re-check, within each model's timeout", () => {
+    expect(clientOptions("k", "flash")).toMatchObject({ model: "decisionnode-flash", timeout: 5_000, maxRetries: 1 });
+    expect(clientOptions("k", "moe")).toMatchObject({ model: "decisionnode-moe", timeout: 10_000, maxRetries: 0 });
   });
 });
 
