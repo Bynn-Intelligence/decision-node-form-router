@@ -6,6 +6,8 @@ The form router is a small example web app that sorts form submissions (sales le
 
 Developers who handle incoming forms, tickets or messages and want them sorted automatically would use it as a starting point. It shows them how to settle most of those decisions on the fast, low-cost model and pay for the most accurate one only when it is needed.
 
+![The form router's result for a marketplace report: routed to the Scams team by the routing rules, every question settled by DecisionNode Flash, with the rule passages it read open below the answer](docs/screenshot.png)
+
 ## Route by your own rules: knowledge
 
 Team names and a line of criteria are not enough to route a submission like your company would. Who owns which product, which customers are on an enterprise contract, what counts as urgent, what always goes to a particular team: those are your rules, and they change. The form router keeps them in a **knowledge base**, and every request reads the rules that apply to it through the `knowledge` booster, on Flash and on the DecisionNode re-check alike.
