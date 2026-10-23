@@ -75,7 +75,7 @@ export const insurance = {
         policy: "BM-CAR-207731",
         date: "Last night",
         description:
-          "Someone smashed the side window of my car on the street and took a laptop bag from the back seat. The car is parked outside the house.",
+          "Someone smashed the rear side window of my car while it was parked on the street outside our house, and took a laptop bag from the back seat. The seat is empty now apart from broken glass, and there is glass on the pavement.",
       },
       pictures: { photos: ["/samples/insurance/broken-car-window.jpg"] },
     },

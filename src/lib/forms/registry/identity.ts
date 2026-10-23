@@ -33,7 +33,8 @@ export const identity = {
   teams: [
     { id: "passport", name: "Passport", criteria: "A passport's photo page.", queue: accepted },
     { id: "national_id", name: "National ID card", criteria: "A national identity card.", queue: accepted },
-    { id: "driving_licence", name: "Driving licence", criteria: "A driving licence card.", queue: accepted },
+    // not accepted for opening an account: a person asks for another document (knowledge/identity/always.md)
+    { id: "driving_licence", name: "Driving licence", criteria: "A driving licence card.", queue: "Manual review" },
     { id: "residence_permit", name: "Residence permit", criteria: "A residence permit card.", queue: accepted },
     {
       id: "not_a_document",

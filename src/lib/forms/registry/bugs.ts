@@ -53,7 +53,7 @@ export const bugs = {
     {
       id: "identity",
       name: "Identity",
-      criteria: "Signing in, sign-in loops, single sign-on, sessions that end, two-factor codes and permissions.",
+      criteria: "The sign-in page, single sign-on, two-factor codes, password rules and permissions.",
     },
     {
       id: "mobile",
