@@ -125,7 +125,7 @@ export async function setupKnowledge({ api, playbooks, baseId, timeout = 300_000
     if (!item) {
       await api.addDocument(base.id, write);
       report.added.push(p.reference);
-    } else if (item.content_sha256 !== p.sha256 || item.title !== p.title) {
+    } else if (item.content_sha256 !== p.sha256) {
       await api.replaceDocument(base.id, item.id, write);
       report.replaced.push(p.reference);
     } else if ((item.pinned ?? false) !== p.pinned || item.metadata?.[SCOPE_KEY] !== p.form) {

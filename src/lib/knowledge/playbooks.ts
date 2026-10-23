@@ -15,13 +15,33 @@ export interface Playbook {
   /** Markdown, as it is stored. */
   text: string;
   pinned: boolean;
-  /** SHA-256 of the text, to tell an unchanged document. */
+  /** The document's `content_sha256` as the API computes it, to tell an unchanged document. */
   sha256: string;
 }
 
-/** The text as the API stores it: line endings as `\n`, invisible control characters removed. */
+/** The format every playbook is written in. */
+export const FORMAT = "markdown";
+
+/** The text as the API stores it: line endings as `\n`, control characters (C0, DEL and C1) removed except tab and line feed. */
 export function normalise(text: string): string {
-  return text.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  return text.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
+/**
+ * A document's `content_sha256` as the API computes it: SHA-256 over the
+ * stored text, the format and the title, in that order, each preceded by its
+ * UTF-8 length in bytes as an unsigned 64-bit big-endian integer.
+ */
+export function contentHash(text: string, format: string, title: string): string {
+  const hash = createHash("sha256");
+  for (const part of [text, format, title]) {
+    const bytes = Buffer.from(part, "utf8");
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64BE(BigInt(bytes.length));
+    hash.update(length);
+    hash.update(bytes);
+  }
+  return hash.digest("hex");
 }
 
 /**
@@ -48,7 +68,7 @@ export function parsePlaybook(form: string, file: string, source: string): Playb
     title,
     text: body,
     pinned: meta.pinned === "true",
-    sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+    sha256: contentHash(body, FORMAT, title),
   };
 }
 

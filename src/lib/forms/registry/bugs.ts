@@ -89,7 +89,7 @@ export const bugs = {
         area: "Web app",
         environment: "Safari 19 on macOS",
         description:
-          "After I sign in, the dashboard flashes and I land on the sign-in page again. The layout of the page also looks broken for a second before it reloads.",
+          "After I sign in, the dashboard flashes for a second and I land on the sign-in page again, with \"Your session has expired. Please sign in again.\" above the form. It has happened six times in a row, screenshot attached.",
       },
       pictures: { screenshots: ["/samples/bugs/sign-in-loop.png"] },
     },

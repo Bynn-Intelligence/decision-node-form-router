@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FORMS, FORM_IDS } from "@/lib/forms/definitions";
-import { BASE_NAME, SCOPE_KEY, parsePlaybook, readPlaybooks, type Playbook } from "@/lib/knowledge/playbooks";
+import { BASE_NAME, SCOPE_KEY, contentHash, normalise, parsePlaybook, readPlaybooks, type Playbook } from "@/lib/knowledge/playbooks";
 import { setupKnowledge, withEnvLine, type KbCollection, type KbItem, type KnowledgeApi } from "@/lib/knowledge/setup";
 
 const KNOWLEDGE = join(__dirname, "..", "knowledge");
@@ -13,7 +13,8 @@ function fakeApi(start: { collections?: KbCollection[]; items?: Record<string, K
   const items: Record<string, KbItem[]> = { ...(start.items ?? {}) };
   const calls: string[] = [];
   let n = 0;
-  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  // the API's content_sha256: the stored text, the format and the title, each length-prefixed
+  const sha = (text: string, title: string) => contentHash(text, "markdown", title);
   const notFound = () => Object.assign(new Error("not found"), { status: 404 });
 
   const api: KnowledgeApi = {
@@ -41,14 +42,14 @@ function fakeApi(start: { collections?: KbCollection[]; items?: Record<string, K
     },
     async addDocument(id, p) {
       calls.push(`add ${p.reference}${p.pinned ? " pinned" : ""} ${p.metadata[SCOPE_KEY]}`);
-      const item = { id: `itm_${++n}`, reference: p.reference, title: p.title, pinned: p.pinned, metadata: p.metadata, content_sha256: sha(p.document), status: "ready" };
+      const item = { id: `itm_${++n}`, reference: p.reference, title: p.title, pinned: p.pinned, metadata: p.metadata, content_sha256: sha(p.document, p.title), status: "ready" };
       items[id].push(item);
       return item;
     },
     async replaceDocument(id, itemId, p) {
       calls.push(`replace ${p.reference}`);
       const item = items[id].find((i) => i.id === itemId)!;
-      Object.assign(item, { title: p.title, pinned: p.pinned, metadata: p.metadata, content_sha256: sha(p.document) });
+      Object.assign(item, { title: p.title, pinned: p.pinned, metadata: p.metadata, content_sha256: sha(p.document, p.title) });
       return item;
     },
     async updateItem(id, itemId, p) {
@@ -103,6 +104,33 @@ describe("the playbooks in the repository", () => {
   });
 });
 
+describe("content_sha256", () => {
+  it("hashes the text, the format and the title, each after its UTF-8 length as 8 bytes big-endian", () => {
+    // the title's length counts its UTF-8 bytes: "Té" is 3
+    const expected = createHash("sha256")
+      .update(Buffer.from([0, 0, 0, 0, 0, 0, 0, 3]))
+      .update("a\nb")
+      .update(Buffer.from([0, 0, 0, 0, 0, 0, 0, 8]))
+      .update("markdown")
+      .update(Buffer.from([0, 0, 0, 0, 0, 0, 0, 3]))
+      .update("Té")
+      .digest("hex");
+    expect(contentHash("a\nb", "markdown", "Té")).toBe(expected);
+  });
+
+  it("changes with the title as well as the text", () => {
+    expect(contentHash("x", "markdown", "One")).not.toBe(contentHash("x", "markdown", "Two"));
+    expect(contentHash("x", "markdown", "One")).not.toBe(contentHash("y", "markdown", "One"));
+  });
+
+  it("is computed over the text as the API stores it", () => {
+    expect(normalise("a\r\nb\u0000\u0085\u007f\tc\n")).toBe("a\nb\tc\n");
+    const p = parsePlaybook("support", "billing", "---\ntitle: Billing\n---\n# Billing\r\n\r\nDouble charges.\r\n");
+    expect(p.text).toBe("# Billing\n\nDouble charges.\n");
+    expect(p.sha256).toBe(contentHash("# Billing\n\nDouble charges.\n", "markdown", "Billing"));
+  });
+});
+
 describe("a playbook", () => {
   it("reads its front matter and normalises its text", () => {
     expect(playbooks[0]).toMatchObject({ reference: "support:always", title: "Always", pinned: true, form: "support" });
@@ -125,6 +153,16 @@ describe("pnpm knowledge:setup", () => {
       `wait ${report.baseId}`,
     ]);
     expect(report.added).toHaveLength(3);
+  });
+
+  it("finds every repository playbook unchanged on a second run", async () => {
+    const all = readPlaybooks(KNOWLEDGE);
+    const fake = fakeApi();
+    const first = await setupKnowledge({ api: fake.api, playbooks: all });
+    expect(first.added).toHaveLength(all.length);
+    const second = await setupKnowledge({ api: fake.api, playbooks: readPlaybooks(KNOWLEDGE), baseId: first.baseId });
+    expect(second.unchanged).toHaveLength(all.length);
+    expect([...second.added, ...second.replaced, ...second.updated, ...second.removed]).toEqual([]);
   });
 
   it("skips unchanged documents on a second run", async () => {
