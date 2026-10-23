@@ -36,8 +36,10 @@ export interface QuestionResult {
   safeAction: string | null;
   /** For a flag that is up: what the result says about it. */
   note: string | null;
-  /** When the last model could not answer this question: why, such as "DecisionNode was busy, safe action taken". */
+  /** When the last model could not answer this question: why, and what it got, such as "DecisionNode was busy, Flash's answer kept". */
   unanswered: string | null;
+  /** `true` when an earlier model's answer below the threshold was kept, because the last model could not answer. */
+  kept: boolean;
 }
 
 /** A passage of the routing rules a call read, as the API cited it. */

@@ -1,6 +1,7 @@
 import { ChoiceAnswer, Image, ScoreAnswer, TruthAnswer, type Answer, type Booster, type Decision, type Question } from "@decisionnode/sdk";
 import { URGENCY_LEVELS } from "../forms/common";
 import type { FormDef, Submission } from "../forms/types";
+import { MODEL_SHORT } from "../format";
 import { MODEL_IDS, type ModelKey, type RouterConfig } from "./config";
 import { confidenceOf, isSure } from "./confidence";
 import { describeError } from "./errors";
@@ -53,7 +54,7 @@ export async function route({ form, submission, config, clients, now = () => per
   const settled = new Map<string, { model: ModelKey; answer: AnswerView }>();
   const calls: CallRecord[] = [];
   let pending = asked.map((q) => q.id);
-  // set when the last model could not answer: its questions take their safe action
+  // set when the last model could not answer, such as "DecisionNode was busy (no ready worker)"
   let unavailable: string | null = null;
 
   for (const [i, model] of config.models.entries()) {
@@ -77,9 +78,9 @@ export async function route({ form, submission, config, clients, now = () => per
       calls.push(failedCall(model, pending, submission.pictures.length, now() - start, err, error));
       // Flash failing hands its questions to the next model, unless every model would fail alike
       if (!last && model === "flash" && error.passOn) continue;
-      // the last model busy, too slow or unreachable: keep what is settled, the rest takes its safe action
+      // the last model busy, too slow or unreachable: route on what the models before it answered
       if (last && error.unavailable) {
-        unavailable = `${error.unavailable}, safe action taken`;
+        unavailable = error.unavailable;
         break;
       }
       return { ok: false, error: { message: error.message, retryable: error.retryable, calls } };
@@ -106,10 +107,19 @@ export async function route({ form, submission, config, clients, now = () => per
     const base = { id: q.id, kind: q.kind, title: q.title, attempts: attempts.get(q.id)! };
     if (done) {
       const final = finalOf(done.answer, q);
-      return { ...base, final, settledBy: done.model, safeAction: null, note: noteOf(final, q), unanswered: null };
+      return { ...base, final, settledBy: done.model, safeAction: null, note: noteOf(final, q), unanswered: null, kept: false };
+    }
+    // the last model could not answer: an earlier model's answer stands, below the threshold as it is;
+    // asking that model again would give the same answer and bill it twice
+    const earlier = unavailable ? base.attempts.findLast((a) => usable(a.answer)) : undefined;
+    if (unavailable && earlier) {
+      const final = finalOf(earlier.answer, q);
+      const unanswered = `${unavailable}, ${MODEL_SHORT[earlier.model]}'s answer kept`;
+      return { ...base, final, settledBy: earlier.model, safeAction: null, note: noteOf(final, q), unanswered, kept: true };
     }
     const { final, safeAction } = safeFor(form, q);
-    return { ...base, final, settledBy: "safe" as const, safeAction, note: null, unanswered: unavailable };
+    const unanswered = unavailable ? `${unavailable}, safe action taken` : null;
+    return { ...base, final, settledBy: "safe" as const, safeAction, note: null, unanswered, kept: false };
   });
 
   return {
@@ -121,12 +131,24 @@ export async function route({ form, submission, config, clients, now = () => per
       knowledge: boosters !== undefined,
       questions: results,
       calls,
-      settledByFlash: results.filter((r) => r.settledBy === "flash").length,
+      settledByFlash: results.filter((r) => r.settledBy === "flash" && !r.kept).length,
       safeActionTaken: results.some((r) => r.settledBy === "safe"),
-      unavailable,
+      unavailable: unavailable ? summaryOf(unavailable, results) : null,
       outcome: outcomeOf(form, results),
     },
   };
+}
+
+/** An answer that can stand: one of the options, a level or a probability. */
+function usable(answer: AnswerView): boolean {
+  return answer.kind !== "none" && answer.kind !== "destination_unregistered";
+}
+
+/** The summary's notice when the last model could not answer: what happened, and what the questions it was to answer got. */
+function summaryOf(unavailable: string, results: QuestionResult[]): string {
+  const kept = [...new Set(results.filter((r) => r.kept).map((r) => r.settledBy as ModelKey))].map((m) => `${MODEL_SHORT[m]}'s answer kept`);
+  const safe = results.some((r) => r.unanswered && !r.kept) ? ["safe action taken"] : [];
+  return [unavailable, [...kept, ...safe].join(" and ")].filter(Boolean).join(", ");
 }
 
 /** The safe action of a question no model was sure of. */

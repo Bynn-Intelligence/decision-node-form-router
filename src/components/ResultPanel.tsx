@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowClockwise, ArrowsSplit, BookOpenText, Lightning, Prohibit, ShieldCheck, Warning, type Icon } from "@phosphor-icons/react";
-import { describeModels, formatConfidence, formatMs } from "@/lib/format";
+import { MODEL_SHORT, describeModels, formatConfidence, formatMs } from "@/lib/format";
 import type { FormDef } from "@/lib/forms/types";
 import { questionsFor } from "@/lib/router/questions";
 import type { SubmitState } from "@/lib/submit";
@@ -210,12 +210,7 @@ function Result({ state }: { state: Extract<SubmitState, { status: "result" }> }
         </p>
       </div>
 
-      {result.unavailable && (
-        <Notice icon={Warning} title={result.unavailable}>
-          The answers that met the threshold stand. The {safe.length === 1 ? "question" : `${safe.length} questions`} it was to
-          re-check took {safe.length === 1 ? "its" : "their"} safe action, and the submission was routed.
-        </Notice>
-      )}
+      {result.unavailable && <UnavailableNotice result={result} />}
       {!outcome.deliver && (
         <Notice icon={Prohibit} title="Held">
           A check was sure this should not be delivered, so it is shown here and not sent on.
@@ -239,6 +234,24 @@ function Result({ state }: { state: Extract<SubmitState, { status: "result" }> }
       <CallList calls={result.calls} />
       <EmailSection email={state.email} />
     </div>
+  );
+}
+
+function UnavailableNotice({ result }: { result: Extract<SubmitState, { status: "result" }>["result"] }) {
+  const kept = result.questions.filter((q) => q.kept);
+  const safe = result.questions.filter((q) => q.unanswered && !q.kept);
+  const count = (n: number, one: string, many: string) => (n === 1 ? one : `${n} ${many}`);
+  const parts = ["The answers that met the threshold stand."];
+  if (kept.length > 0) {
+    const by = MODEL_SHORT[kept[0].settledBy as keyof typeof MODEL_SHORT];
+    parts.push(`${count(kept.length, "One question keeps", "questions keep")} ${by}'s answer, below the threshold.`);
+  }
+  if (safe.length > 0) parts.push(`${count(safe.length, "One question no model answered", "questions no model answered")} took the safe action.`);
+  parts.push("The submission was routed.");
+  return (
+    <Notice icon={Warning} title={result.unavailable!}>
+      {parts.join(" ")}
+    </Notice>
   );
 }
 

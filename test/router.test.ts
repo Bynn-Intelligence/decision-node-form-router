@@ -179,44 +179,67 @@ describe("the cascade", () => {
     expect(q(result, "spam").settledBy).toBe("moe");
   });
 
-  it("routes with safe actions when DecisionNode is busy, keeping what Flash settled", async () => {
+  it("keeps Flash's answer when DecisionNode is busy, and routes the submission", async () => {
     const { result, calls } = await ok(
       run({
-        flash: { ...sure, team: choiceAnswer("billing", 0.2) },
+        flash: { ...sure, team: choiceAnswer("billing", 0.55) },
         moe: new OverloadedError("No ready worker.", { status: 529, retryAfter: 2, reason: "no ready worker" }),
       }),
     );
+    // Flash is not asked again: its answer is the same, and a second call would bill twice
     expect(calls.map((c) => c.model)).toEqual(["decisionnode-flash", "decisionnode-moe"]);
-    expect(result.unavailable).toBe("DecisionNode was busy (no ready worker), safe action taken");
     expect(q(result, "team")).toMatchObject({
-      settledBy: "safe",
-      unanswered: "DecisionNode was busy (no ready worker), safe action taken",
+      final: { kind: "destination", teamId: "billing", teamName: "Billing" },
+      settledBy: "flash",
+      kept: true,
+      safeAction: null,
+      unanswered: "DecisionNode was busy (no ready worker), Flash's answer kept",
     });
-    expect(result.outcome.teamId).toBe("customer_care");
-    // the answers that met the threshold stand
-    expect(q(result, "urgency")).toMatchObject({ settledBy: "flash", unanswered: null });
-    expect(q(result, "spam").settledBy).toBe("flash");
+    expect(q(result, "team").attempts).toEqual([expect.objectContaining({ model: "flash", confidence: 0.55, sure: false })]);
+    expect(result.unavailable).toBe("DecisionNode was busy (no ready worker), Flash's answer kept");
+    expect(result.outcome).toMatchObject({ teamId: "billing", deliver: true });
+    expect(result.safeActionTaken).toBe(false);
+    // a kept answer is not one Flash settled
+    expect(result.settledByFlash).toBe(2);
+    expect(q(result, "urgency")).toMatchObject({ settledBy: "flash", kept: false, unanswered: null });
     expect(result.calls[1].error?.message).toBe("DecisionNode is busy right now.");
   });
 
-  it("routes with safe actions when DecisionNode does not answer in time", async () => {
+  it("keeps Flash's answer when DecisionNode does not answer in time", async () => {
     const { result } = await ok(run({ flash: { ...sure, urgency: scoreAnswer(1, 0.3) }, moe: new TimeoutError("timed out") }));
-    expect(result.unavailable).toBe("DecisionNode did not answer in time, safe action taken");
-    expect(q(result, "urgency").final).toEqual({ kind: "urgency", label: "Unsure", level: null });
+    expect(result.unavailable).toBe("DecisionNode did not answer in time, Flash's answer kept");
+    expect(q(result, "urgency")).toMatchObject({ final: { kind: "urgency", label: "Normal", level: 1 }, kept: true });
     expect(result.outcome).toMatchObject({ teamId: "billing", deliver: true });
   });
 
-  it("routes with safe actions when DecisionNode has a server error or cannot be reached", async () => {
+  it("keeps Flash's answer when DecisionNode has a server error or cannot be reached", async () => {
     for (const err of [new ServerError("bad gateway", { status: 502 }), new ConnectionError("reset")]) {
-      const { result } = await ok(run({ flash: { ...sure, spam: truthAnswer(0.5) }, moe: err }));
-      expect(q(result, "spam").settledBy).toBe("safe");
-      expect(result.unavailable).toMatch(/safe action taken$/);
+      const { result } = await ok(run({ flash: { ...sure, spam: truthAnswer(0.6) }, moe: err }));
+      expect(q(result, "spam")).toMatchObject({ kept: true, final: { kind: "flag", value: true, raised: true } });
+      expect(result.unavailable).toMatch(/Flash's answer kept$/);
     }
+  });
+
+  it("takes the safe action for a question Flash gave no usable answer to when DecisionNode is busy", async () => {
+    const { result } = await ok(
+      run({ flash: { ...sure, team: choiceAnswer("marketing", 0.99) }, moe: new OverloadedError("busy", { status: 529 }) }),
+    );
+    expect(q(result, "team")).toMatchObject({ settledBy: "safe", kept: false, unanswered: expect.stringMatching(/safe action taken$/) });
+    expect(result.outcome.teamId).toBe("customer_care");
+  });
+
+  it("takes the safe action when DecisionNode answers below the threshold", async () => {
+    const { result } = await ok(
+      run({ flash: { ...sure, team: choiceAnswer("billing", 0.5) }, moe: { team: choiceAnswer("billing", 0.6) } }),
+    );
+    expect(q(result, "team")).toMatchObject({ settledBy: "safe", kept: false, unanswered: null });
+    expect(result.unavailable).toBeNull();
   });
 
   it("gives every question its safe action when Flash and DecisionNode both time out", async () => {
     const { result } = await ok(run({ flash: new TimeoutError("t"), moe: new TimeoutError("t") }));
     expect(result.questions.every((x) => x.settledBy === "safe")).toBe(true);
+    expect(result.unavailable).toBe("DecisionNode did not answer in time, safe action taken");
     expect(result.outcome.teamId).toBe("customer_care");
     expect(result.calls.map((c) => c.error?.message)).toEqual([
       "DecisionNode Flash did not answer in time.",

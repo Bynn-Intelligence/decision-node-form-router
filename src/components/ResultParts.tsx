@@ -32,9 +32,10 @@ function finalText(f: FinalAnswer): string {
   return f.value === null ? "Unsure, review it" : f.label;
 }
 
-function SettledChip({ by }: { by: QuestionResult["settledBy"] }) {
-  const style = by === "flash" ? "border-lime/50 text-lime" : by === "moe" ? "border-white/40 text-text" : "border-amber/50 text-amber";
-  const label = by === "safe" ? "Safe action" : `Settled by ${MODEL_SHORT[by]}`;
+function SettledChip({ by, kept }: { by: QuestionResult["settledBy"]; kept: boolean }) {
+  const style =
+    kept || by === "safe" ? "border-amber/50 text-amber" : by === "flash" ? "border-lime/50 text-lime" : "border-white/40 text-text";
+  const label = by === "safe" ? "Safe action" : kept ? `${MODEL_SHORT[by]}'s answer kept` : `Settled by ${MODEL_SHORT[by]}`;
   return <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-medium ${style}`}>{label}</span>;
 }
 
@@ -102,7 +103,7 @@ export function QuestionCard({ question, calls, threshold }: { question: Questio
         <h3 className="text-sm text-muted">{question.title}</h3>
         <p className="font-medium">{finalText(question.final)}</p>
         <span className="ml-auto">
-          <SettledChip by={question.settledBy} />
+          <SettledChip by={question.settledBy} kept={question.kept} />
         </span>
       </header>
 

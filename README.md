@@ -128,7 +128,7 @@ Without a key the app routes nothing and shows how to add one.
 2. DecisionNode Flash (`decisionnode-flash`) answers every question, reading the form's rules when a knowledge base is set.
 3. Each answer's confidence is compared with the threshold. An answer at or above it is final.
 4. The questions below the threshold, and only those, are sent to DecisionNode (`decisionnode-moe`) with the same state, pictures and rules, and `fallback: false`, so the re-check always comes from the full model. Its answers are final when they reach the threshold.
-5. A question still below the threshold takes its safe action. So does a question the last model could not answer because it was busy, too slow or unreachable: the answers that met the threshold stand, and the submission is routed.
+5. A question DecisionNode answered but still below the threshold takes its safe action. A question DecisionNode could not answer, because it was busy, too slow or unreachable, keeps Flash's answer, and the submission is routed.
 
 Confidence is on the same 0 to 1 scale for every question type:
 
@@ -149,7 +149,7 @@ A submission settled as spam is held: it is shown, and no email is sent. An iden
 
 If Flash fails or does not answer within 5 seconds, its questions go to DecisionNode, and the result says why. Flash's request is retried once after a temporary failure, such as a timeout or a busy model.
 
-The re-check is never retried, so it never holds the page: 10 seconds is its limit. If DecisionNode is busy, does not answer in time, cannot be reached or has a server error, the submission is still routed. The answers that met the threshold stand, the questions it was to re-check take their safe action, and the result and the email say so on those questions and in the summary, for example "DecisionNode was busy, safe action taken", with the reason the API gave. The same holds for Flash when it is the only model in `ROUTER_MODELS`.
+The re-check is never retried, so it never holds the page: 10 seconds is its limit. If DecisionNode is busy, does not answer in time, cannot be reached or has a server error, the submission is still routed. The answers that met the threshold stand, and each question it was to re-check keeps Flash's answer, below the threshold as it is: Flash is not asked again, since the same request gets the same answer and would only be billed twice. The result and the email say so on those questions and in the summary, for example "DecisionNode was busy, Flash's answer kept", with the reason the API gave. A question no model answered at all, such as when Flash failed too, takes its safe action, and the notice says "safe action taken".
 
 A failure that waiting cannot fix stops the submission: a key that is not accepted, no credit, a refused request, a request the API cannot read, or routing rules that cannot be read. The submission is then not routed and no email is sent; when trying again can help, the page offers it.
 
